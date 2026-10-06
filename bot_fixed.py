@@ -28,7 +28,7 @@ HABITS = [
 ]
 BODY=["بناء العضلات","إبراز عضلات البطن","تحديد الفك وإبرازه","تحسين اللياقة"]
 
-db=sqlite3.connect(DB)
+db=sqlite3.connect(DB, check_same_thread=False)
 db.executescript("""
 CREATE TABLE IF NOT EXISTS users(user_id INTEGER PRIMARY KEY,gender TEXT,xp INTEGER DEFAULT 0,level INTEGER DEFAULT 1);
 CREATE TABLE IF NOT EXISTS selections(user_id INTEGER,kind TEXT,item TEXT,PRIMARY KEY(user_id,kind,item));
@@ -167,6 +167,7 @@ def handle_callback(c):
         r=get(uid);edit(chat,mid,f"👤 ملفي\n\nالمستوى: {r[3]}\nXP: {r[2]}\nطلبات الوجه: {len(chosen(uid,'face'))}\nالعادات: {len(chosen(uid,'habit'))}\nأهداف الجسم: {len(chosen(uid,'body'))}",main_kb());answer(c["id"]);return
     if data=="home:workouts":
         edit(chat,mid,"🏋️ تماريني\n\nنظام 30 يومًا سيبدأ من الأسهل ثم يتدرج للأصعب.\n\nاليوم 1:\n• Squat × 8\n• Push-up على سطح مرتفع × 6\n• Plank 15 ثانية\n\nسنضيف مكتبة التمارين الكاملة في المرحلة التالية.",main_kb());answer(c["id"]);return
+
 def main():
     keep_alive()
     offset = 0
@@ -177,10 +178,12 @@ def main():
             for u in r.get("result", []):
                 offset = u["update_id"] + 1
                 if "message" in u:
-                    handle_message(u["me
+                    handle_message(u["message"])
                 elif "callback_query" in u:
-                    handle_callback(u["c
+                    handle_callback(u["callback_query"])
         except Exception as e:
             print("خطأ اتصال مؤقت:", e)
             time.sleep(2)
-if __name__=="__main__": main()
+
+if __name__=="__main__":
+    main()
