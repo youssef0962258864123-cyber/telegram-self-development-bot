@@ -1,3 +1,4 @@
+from keep_alive import keep_alive
 import os, json, time, sqlite3
 from datetime import date
 from urllib.request import Request, urlopen
@@ -168,6 +169,7 @@ def handle_callback(c):
         edit(chat,mid,"🏋️ تماريني\n\nنظام 30 يومًا سيبدأ من الأسهل ثم يتدرج للأصعب.\n\nاليوم 1:\n• Squat × 8\n• Push-up على سطح مرتفع × 6\n• Plank 15 ثانية\n\nسنضيف مكتبة التمارين الكاملة في المرحلة التالية.",main_kb());answer(c["id"]);return
 
 def main():
+        keep_alive()
     offset = 0
     print("البوت يعمل...")
     while True:
