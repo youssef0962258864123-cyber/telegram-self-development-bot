@@ -5,173 +5,307 @@ from urllib.request import Request, urlopen
 from urllib.parse import urlencode
 
 TOKEN = os.environ.get("BOT_TOKEN")
+ADMIN_ID = int(os.environ.get("ADMIN_ID", "0")) # خت ايدي حسابك هنا في Render Variables
 if not TOKEN:
     raise SystemExit("BOT_TOKEN غير موجود")
 
 API = f"https://api.telegram.org/bot{TOKEN}"
-DB = "tawer_nfs.db"
+DB = "marketplace.db"
 
-FACE_GOALS = [
-"إزالة حب الشباب وآثاره","التخلص من الهالات السوداء","إزالة الرؤوس السوداء والبيضاء",
-"التخلص من مسامات الوجه الواسعة","إزالة الدهون واللمعان من الوجه","تحديد الفك وإبرازه",
-"تنحيف الوجه المنفخ","رفع الخدود المترهلة","تكثيف الحواجب وترتيبها",
-"حل مشكلة شعر الوجه الخفيف","تصغير الأنف طبيعياً بدون عملية","توريد الشفايف وإزالة السواد",
-"تبييض الأسنان للابتسامة","التخلص من رائحة الفم","منع تساقط الشعر تكثيف الشعر","التخلص من القشرة"
-]
-HABITS = [
-"السهر وقلة النوم","عدم شرب كمية كافية من الماء","الإكثار من السكر والحلويات",
-"الإكثار من الملح والأكل المالح","لمس الوجه باليد بشكل متكرر","النوم على وسادة غير نظيفة",
-"غسل الوجه بصابون الجسم","إهمال واقي الشمس","التدخين","شرب المشروبات الغازية",
-"تناول الوجبات السريعة يوميا","عدم ممارسة الرياضة",
-"الجلوس والرأس منحني على الهاتف طوال الوقت","مقارنة نفسك بالآخرين على مواقع التواصل",
-"عدم الاهتمام بالنظافة الشخصية","التوتر والقلق المستمر"
-]
-BODY=["بناء العضلات","إبراز عضلات البطن","تحديد الفك وإبرازه","تحسين اللياقة"]
+BANKAK_INFO = "بنكك: 1234567 - باسم يوسف - 10% عمولة المنصة"
 
-db=sqlite3.connect(DB, check_same_thread=False)
+db = sqlite3.connect(DB, check_same_thread=False)
 db.executescript("""
-CREATE TABLE IF NOT EXISTS users(user_id INTEGER PRIMARY KEY,gender TEXT,xp INTEGER DEFAULT 0,level INTEGER DEFAULT 1);
-CREATE TABLE IF NOT EXISTS selections(user_id INTEGER,kind TEXT,item TEXT,PRIMARY KEY(user_id,kind,item));
-CREATE TABLE IF NOT EXISTS done(user_id INTEGER,day TEXT,task TEXT,PRIMARY KEY(user_id,day,task));
+CREATE TABLE IF NOT EXISTS users(user_id INTEGER PRIMARY KEY, role TEXT, state TEXT, temp_data TEXT);
+CREATE TABLE IF NOT EXISTS merchants(user_id INTEGER PRIMARY KEY, store_name TEXT, phone TEXT, city TEXT, status TEXT DEFAULT 'pending');
+CREATE TABLE IF NOT EXISTS products(id INTEGER PRIMARY KEY AUTOINCREMENT, merchant_id INTEGER, name TEXT, price INTEGER, photo_id TEXT, description TEXT, status TEXT DEFAULT 'pending');
+CREATE TABLE IF NOT EXISTS orders(id INTEGER PRIMARY KEY AUTOINCREMENT, buyer_id INTEGER, product_id INTEGER, merchant_id INTEGER, buyer_info TEXT, photo_proof TEXT, status TEXT DEFAULT 'awaiting_proof');
 """)
 db.commit()
 
-def api(method, data=None, timeout=20):
+def api(method, data=None):
     data = data or {}
-    req = Request(
-        API + "/" + method,
-        data=urlencode(data).encode(),
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-    )
-    with urlopen(req, timeout=timeout) as r:
+    req = Request(API + "/" + method, data=urlencode(data).encode(), headers={"Content-Type": "application/x-www-form-urlencoded"})
+    with urlopen(req, timeout=30) as r:
         return json.loads(r.read())
 
-def ensure(uid):
-    db.execute("INSERT OR IGNORE INTO users(user_id) VALUES(?)",(uid,)); db.commit()
+def send(chat, text, kb=None, photo=None):
+    if photo:
+        d = {"chat_id": chat, "photo": photo, "caption": text}
+        if kb: d["reply_markup"] = json.dumps({"inline_keyboard": kb}, ensure_ascii=False)
+        return api("sendPhoto", d)
+    else:
+        d = {"chat_id": chat, "text": text}
+        if kb: d["reply_markup"] = json.dumps({"inline_keyboard": kb}, ensure_ascii=False)
+        return api("sendMessage", d)
 
-def get(uid):
-    ensure(uid); return db.execute("SELECT * FROM users WHERE user_id=?",(uid,)).fetchone()
+def edit(chat, msg, text, kb=None):
+    d = {"chat_id": chat, "message_id": msg, "text": text}
+    if kb: d["reply_markup"] = json.dumps({"inline_keyboard": kb}, ensure_ascii=False)
+    return api("editMessageText", d)
 
-def chosen(uid,kind):
-    return [x[0] for x in db.execute("SELECT item FROM selections WHERE user_id=? AND kind=? ORDER BY rowid",(uid,kind))]
+def answer(cid, text=""):
+    return api("answerCallbackQuery", {"callback_query_id": cid, "text": text})
 
-def toggle(uid,kind,item):
-    if db.execute("SELECT 1 FROM selections WHERE user_id=? AND kind=? AND item=?",(uid,kind,item)).fetchone():
-        db.execute("DELETE FROM selections WHERE user_id=? AND kind=? AND item=?",(uid,kind,item))
-    else: db.execute("INSERT INTO selections VALUES(?,?,?)",(uid,kind,item))
+def get_user(uid):
+    row = db.execute("SELECT * FROM users WHERE user_id=?", (uid,)).fetchone()
+    if not row:
+        db.execute("INSERT INTO users(user_id, role, state) VALUES(?,?,?)", (uid, None, None))
+        db.commit()
+        return (uid, None, None, None)
+    return row
+
+def set_state(uid, state, temp=None):
+    if temp is not None:
+        db.execute("UPDATE users SET state=?, temp_data=? WHERE user_id=?", (state, json.dumps(temp, ensure_ascii=False), uid))
+    else:
+        db.execute("UPDATE users SET state=? WHERE user_id=?", (state, uid))
     db.commit()
 
-def xp(uid,n):
-    r=get(uid); new=max(0,r[2]+n); db.execute("UPDATE users SET xp=?,level=? WHERE user_id=?",(new,1+new//100,uid)); db.commit()
+def get_temp(uid):
+    row = get_user(uid)
+    if row[3]:
+        try: return json.loads(row[3])
+        except: return {}
+    return {}
 
-def send(chat,text,kb=None):
-    d={"chat_id":chat,"text":text}
-    if kb: d["reply_markup"]=json.dumps({"inline_keyboard":kb},ensure_ascii=False)
-    return api("sendMessage",d)
-
-def edit(chat,msg,text,kb=None):
-    d={"chat_id":chat,"message_id":msg,"text":text}
-    if kb: d["reply_markup"]=json.dumps({"inline_keyboard":kb},ensure_ascii=False)
-    return api("editMessageText",d)
-
-def answer(cid,text=""):
-    return api("answerCallbackQuery",{"callback_query_id":cid,"text":text})
-
-def main_kb():
-    return [[{"text":"📋 مهام اليوم","callback_data":"home:tasks"},{"text":"🎯 خططي","callback_data":"home:plans"}],
-            [{"text":"🏋️ تماريني","callback_data":"home:workouts"},{"text":"📊 تقدمي","callback_data":"home:progress"}],
-            [{"text":"👤 ملفي","callback_data":"home:profile"}]]
-
-def home(uid):
-    r=get(uid); return f"🏠 طوّر نفسك\n\nالمستوى: {r[3]}\nXP: {r[2]}\n\nاختر قسمًا:"
-
-def picker(uid,kind,items,prefix):
-    s=chosen(uid,kind); rows=[]
-    for i,x in enumerate(items):
-        rows.append([{"text":("✅ " if x in s else "⬜ ")+x,"callback_data":f"{prefix}:{i}"}])
-    rows.append([{"text":"💾 حفظ","callback_data":f"save:{kind}"}])
-    rows.append([{"text":"↩️ الرئيسية","callback_data":"home:main"}])
-    return rows
-
-def tasks(uid):
-    a=[]
-    if chosen(uid,"face"): a.append("اتبعت نصائح تحسين الوجه")
-    for h in chosen(uid,"habit"): a.append("تجنبت: "+h)
-    if chosen(uid,"body"): a.append("أنجزت تمرين اليوم")
-    return a or ["شربت كمية كافية من الماء"]
-
-def isdone(uid,t):
-    return db.execute("SELECT 1 FROM done WHERE user_id=? AND day=? AND task=?",(uid,date.today().isoformat(),t)).fetchone() is not None
-
-def task_kb(uid):
-    rows=[]
-    for i,t in enumerate(tasks(uid)): rows.append([{"text":("✅ " if isdone(uid,t) else "⬜ ")+t,"callback_data":f"task:{i}"}])
-    rows.append([{"text":"🏠 الرئيسية","callback_data":"home:main"}]); return rows
+# --- HANDLERS ---
 
 def handle_message(m):
-    uid=m["from"]["id"]; chat=m["chat"]["id"]; text=m.get("text","")
-    ensure(uid)
+    uid = m["from"]["id"]
+    chat = m["chat"]["id"]
+    text = m.get("text", "")
+    get_user(uid)
+
+    # Admin check
+    is_admin = (ADMIN_ID!= 0 and uid == ADMIN_ID)
+
+    # State machine
+    user = get_user(uid)
+    state = user[2]
+    temp = get_temp(uid)
+
+    if state == "await_store_name":
+        temp["store_name"] = text
+        set_state(uid, "await_phone", temp)
+        send(chat, "تمام ✅\nالآن أرسل رقم واتساب المتجر:")
+        return
+
+    if state == "await_phone":
+        temp["phone"] = text
+        set_state(uid, "await_city", temp)
+        send(chat, "آخر خطوة، أرسل مدينتك / ولايتك:")
+        return
+
+    if state == "await_city":
+        temp["city"] = text
+        db.execute("INSERT OR REPLACE INTO merchants(user_id, store_name, phone, city, status) VALUES(?,?,?,?,?)",
+                   (uid, temp["store_name"], temp["phone"], temp["city"], "pending"))
+        db.commit()
+        set_state(uid, None, {})
+        send(chat, "✅ تم إرسال طلبك للإدارة، سيتم مراجعته خلال ساعات وسيصلك إشعار عند القبول.")
+        if ADMIN_ID!= 0:
+            kb = [[{"text": "✅ قبول التاجر", "callback_data": f"admin_m_ok:{uid}"}, {"text": "❌ رفض", "callback_data": f"admin_m_no:{uid}"}]]
+            send(ADMIN_ID, f"🔔 تاجر جديد بانتظار الموافقة:\n\nالمتجر: {temp['store_name']}\nالهاتف: {temp['phone']}\nالمدينة: {temp['city']}\nالايدي: {uid}", kb)
+        return
+
+    if state == "await_prod_name":
+        temp["name"] = text
+        set_state(uid, "await_prod_price", temp)
+        send(chat, "حلو، الآن أرسل السعر بالأرقام فقط (مثلا 15000):")
+        return
+
+    if state == "await_prod_price":
+        if not text.isdigit():
+            send(chat, "أرسل السعر أرقام فقط:")
+            return
+        temp["price"] = int(text)
+        set_state(uid, "await_prod_desc", temp)
+        send(chat, "آخر خطوة، أرسل وصف قصير للمنتج:")
+        return
+
+    if state == "await_prod_desc":
+        temp["desc"] = text
+        # create product pending
+        db.execute("INSERT INTO products(merchant_id, name, price, photo_id, description, status) VALUES(?,?,?,?,?,?)",
+                   (uid, temp["name"], temp["price"], temp["photo"], temp["desc"], "pending"))
+        db.commit()
+        set_state(uid, None, {})
+        send(chat, "✅ تم رفع المنتج، بانتظار موافقة الإدارة. سيظهر في السوق بعد الموافقة.")
+        if ADMIN_ID!= 0:
+            prod_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+            kb = [[{"text": "✅ نشر المنتج", "callback_data": f"admin_p_ok:{prod_id}"}, {"text": "❌ رفض", "callback_data": f"admin_p_no:{prod_id}"}]]
+            send(ADMIN_ID, f"🔔 منتج جديد بانتظار الموافقة:\n{temp['name']} - {temp['price']} جنيه", kb, photo=temp["photo"])
+        return
+
+    if state == "await_buyer_info":
+        temp["buyer_info"] = text
+        set_state(uid, "await_proof", temp)
+        send(chat, f"تمام، معلوماتك محفوظة.\n\n{BANKAK_INFO}\n\nالسعر الكلي: {temp['price']} جنيه\n\nبعد التحويل، أرسل **صورة إشعار بنكك** هنا:")
+        return
+
+    if "photo" in m and state == "await_prod_photo":
+        photo_id = m["photo"][-1]["file_id"]
+        temp["photo"] = photo_id
+        set_state(uid, "await_prod_name", temp)
+        send(chat, "الصورة وصلت ✅\nالآن أرسل اسم المنتج:")
+        return
+
+    if "photo" in m and state == "await_proof":
+        photo_id = m["photo"][-1]["file_id"]
+        temp["proof"] = photo_id
+        # create order
+        db.execute("INSERT INTO orders(buyer_id, product_id, merchant_id, buyer_info, photo_proof, status) VALUES(?,?,?,?,?,?)",
+                   (uid, temp["product_id"], temp["merchant_id"], temp["buyer_info"], photo_id, "pending_admin"))
+        db.commit()
+        order_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        set_state(uid, None, {})
+        send(chat, "✅ تم استلام إشعار الدفع، الإدارة حتراجعو الآن ولو صحيح حنأكد ليك الطلب.")
+        if ADMIN_ID!= 0:
+            kb = [[{"text": "✅ تأكيد الدفع والتسليم", "callback_data": f"admin_o_ok:{order_id}"}, {"text": "❌ دفع غير صحيح", "callback_data": f"admin_o_no:{order_id}"}]]
+            send(ADMIN_ID, f"💰 طلب جديد بانتظار تأكيد الدفع #{order_id}\nالمنتج: {temp['prod_name']}\nالمشتري: {temp['buyer_info']}\nالمبلغ: {temp['price']}", kb, photo=photo_id)
+        return
+
+    # Commands
     if text.startswith("/start"):
-        r=get(uid)
-        if not r[1]:
-            send(chat,"مرحبًا بك في «طوّر نفسك» 🌟\n\nسنحوّل أهدافك إلى خطط ومهام يومية.\n\nاختر النوع:",
-                 [[{"text":"ولد","callback_data":"gender:male"},{"text":"بنت","callback_data":"gender:female"}]])
-        else: send(chat,home(uid),main_kb())
+        kb = [[{"text": "🛍️ أنا مشتري - تصفح السوق", "callback_data": "role:buyer"}, {"text": "🏪 أنا تاجر - افتح متجر", "callback_data": "role:merchant"}]]
+        if is_admin:
+            kb.append([{"text": "👑 لوحة الإدارة", "callback_data": "admin:panel"}])
+        send(chat, "أهلا بك في سوق طوّر نفسك 🌟\n\nاختر هل أنت مشتري أم تاجر؟", kb)
+        return
+
+    if text.startswith("/add_product"):
+        merch = db.execute("SELECT * FROM merchants WHERE user_id=?", (uid,)).fetchone()
+        if not merch or merch[4]!= "approved":
+            send(chat, "متجرك لم تتم الموافقة عليه بعد. انتظر موافقة الإدارة.")
+            return
+        set_state(uid, "await_prod_photo", {})
+        send(chat, "لإضافة منتج جديد، أرسل صورة المنتج أولاً:")
+        return
+
+    if text.startswith("/admin") and is_admin:
+        show_admin(chat)
+        return
 
 def handle_callback(c):
-    uid=c["from"]["id"]; chat=c["message"]["chat"]["id"]; mid=c["message"]["message_id"]; data=c["data"]
-    ensure(uid)
-    if data.startswith("gender:"):
-        db.execute("UPDATE users SET gender=? WHERE user_id=?",(data.split(":")[1],uid));db.commit()
-        edit(chat,mid,home(uid),main_kb()); answer(c["id"]); return
-    if data=="home:main": edit(chat,mid,home(uid),main_kb());answer(c["id"]);return
-    if data=="home:plans":
-        edit(chat,mid,"🎯 خططي\n\nاختر الخطة:",[
-            [{"text":f"✨ تحسين شكل الوجه ({len(chosen(uid,'face'))})","callback_data":"plans:face"}],
-            [{"text":f"🚫 التخلص من العادات السيئة ({len(chosen(uid,'habit'))})","callback_data":"plans:habit"}],
-            [{"text":f"🏋️ بناء جسم مثالي ({len(chosen(uid,'body'))})","callback_data":"plans:body"}],
-            [{"text":"🏠 الرئيسية","callback_data":"home:main"}]])
-        answer(c["id"]);return
-    if data=="plans:face":
-        edit(chat,mid,"✨ تحسين شكل الوجه\n\nاختر كل ما تريد العمل عليه:",picker(uid,"face",FACE_GOALS,"face"));answer(c["id"]);return
-    if data.startswith("face:"):
-        toggle(uid,"face",FACE_GOALS[int(data.split(":")[1])]);edit(chat,mid,"✨ تحسين شكل الوجه\n\nاختر كل ما تريد العمل عليه:",picker(uid,"face",FACE_GOALS,"face"));answer(c["id"],"تم");return
-    if data=="save:face":
-        if not chosen(uid,"face"): answer(c["id"],"اختر طلبًا واحدًا على الأقل");return
-        edit(chat,mid,"تم حفظ خطة تحسين شكل الوجه ✅\nيمكنك إضافة خطة أخرى من «خططي».",main_kb());answer(c["id"]);return
-    if data=="plans:habit":
-        edit(chat,mid,"🚫 التخلص من العادات السيئة\n\nاختر العادات التي تريد التخلص منها:",picker(uid,"habit",HABITS,"habit"));answer(c["id"]);return
-    if data.startswith("habit:"):
-        toggle(uid,"habit",HABITS[int(data.split(":")[1])]);edit(chat,mid,"🚫 التخلص من العادات السيئة\n\nاختر العادات التي تريد التخلص منها:",picker(uid,"habit",HABITS,"habit"));answer(c["id"],"تم");return
-    if data=="save:habit":
-        edit(chat,mid,"تم حفظ العادات ✅\nستظهر كمهام يومية.",main_kb());answer(c["id"]);return
-    if data=="plans:body":
-        edit(chat,mid,"🏋️ بناء جسم مثالي\n\nاختر أهدافك:",picker(uid,"body",BODY,"body"));answer(c["id"]);return
-    if data.startswith("body:"):
-        toggle(uid,"body",BODY[int(data.split(":")[1])]);edit(chat,mid,"🏋️ بناء جسم مثالي\n\nاختر أهدافك:",picker(uid,"body",BODY,"body"));answer(c["id"]);return
-    if data=="save:body":
-        edit(chat,mid,"تم حفظ أهداف الجسم ✅\nيمكنك الآن فتح «تماريني».",main_kb());answer(c["id"]);return
-    if data=="home:tasks":
-        edit(chat,mid,"📋 مهام اليوم\n\nكل مهمة مكتملة = +10 XP.",task_kb(uid));answer(c["id"]);return
-    if data.startswith("task:"):
-        t=tasks(uid)[int(data.split(":")[1])]; day=date.today().isoformat()
-        if isdone(uid,t):
-            db.execute("DELETE FROM done WHERE user_id=? AND day=? AND task=?",(uid,day,t));xp(uid,-10)
+    uid = c["from"]["id"]
+    chat = c["message"]["chat"]["id"]
+    mid = c["message"]["message_id"]
+    data = c["data"]
+    get_user(uid)
+    is_admin = (ADMIN_ID!= 0 and uid == ADMIN_ID)
+
+    if data == "role:buyer":
+        products = db.execute("SELECT * FROM products WHERE status='approved' ORDER BY id DESC LIMIT 10").fetchall()
+        if not products:
+            edit(chat, mid, "السوق فاضي حاليا، تعال لاحقا 🌙", [[{"text": "🏠 الرئيسية", "callback_data": "home"}]])
         else:
-            db.execute("INSERT INTO done VALUES(?,?,?)",(uid,day,t));xp(uid,10)
-        db.commit();edit(chat,mid,"📋 مهام اليوم\n\nكل مهمة مكتملة = +10 XP.",task_kb(uid));answer(c["id"]);return
-    if data=="home:progress":
-        r=get(uid); n=db.execute("SELECT COUNT(*) FROM done WHERE user_id=?",(uid,)).fetchone()[0]
-        edit(chat,mid,f"📊 تقدمي\n\nالمستوى: {r[3]}\nXP: {r[2]}\nالمهام المكتملة: {n}",main_kb());answer(c["id"]);return
-    if data=="home:profile":
-        r=get(uid);edit(chat,mid,f"👤 ملفي\n\nالمستوى: {r[3]}\nXP: {r[2]}\nطلبات الوجه: {len(chosen(uid,'face'))}\nالعادات: {len(chosen(uid,'habit'))}\nأهداف الجسم: {len(chosen(uid,'body'))}",main_kb());answer(c["id"]);return
-    if data=="home:workouts":
-        edit(chat,mid,"🏋️ تماريني\n\nنظام 30 يومًا سيبدأ من الأسهل ثم يتدرج للأصعب.\n\nاليوم 1:\n• Squat × 8\n• Push-up على سطح مرتفع × 6\n• Plank 15 ثانية\n\nسنضيف مكتبة التمارين الكاملة في المرحلة التالية.",main_kb());answer(c["id"]);return
+            for p in products[:5]: # نعرض اول 5
+                merch = db.execute("SELECT store_name FROM merchants WHERE user_id=?", (p[1],)).fetchone()
+                store = merch[0] if merch else "متجر"
+                kb = [[{"text": f"🛒 شراء - {p[3]} جنيه", "callback_data": f"buy:{p[0]}"}, {"text": f"🏪 {store}", "callback_data": f"store:{p[1]}"}]]
+                send(chat, f"📦 {p[2]}\n💰 {p[3]} جنيه\n📝 {p[5]}\n🏪 {store}", kb, photo=p[4])
+        answer(c["id"])
+        return
+
+    if data == "role:merchant":
+        merch = db.execute("SELECT * FROM merchants WHERE user_id=?", (uid,)).fetchone()
+        if merch:
+            if merch[4] == "pending":
+                edit(chat, mid, "طلبك قيد المراجعة، انتظر موافقة الإدارة ⏳", [[{"text": "🏠 الرئيسية", "callback_data": "home"}]])
+            elif merch[4] == "approved":
+                edit(chat, mid, f"أهلا بك يا صاحب متجر {merch[1]} ✅\n\nلإضافة منتج أرسل /add_product\nمنتجاتك المنشورة: {db.execute('SELECT COUNT(*) FROM products WHERE merchant_id=? AND status=?',(uid,'approved')).fetchone()[0]}", [[{"text": "➕ إضافة منتج", "callback_data": "add_prod"}, {"text": "📊 مبيعاتي", "callback_data": "my_sales"}]])
+            else:
+                edit(chat, mid, "تم رفض متجرك، تواصل مع الإدارة.", [[{"text": "🏠 الرئيسية", "callback_data": "home"}]])
+        else:
+            set_state(uid, "await_store_name", {})
+            edit(chat, mid, "لفتح متجر جديد، أرسل اسم المتجر:")
+        answer(c["id"])
+        return
+
+    if data == "add_prod":
+        set_state(uid, "await_prod_photo", {})
+        send(chat, "أرسل صورة المنتج:")
+        answer(c["id"])
+        return
+
+    if data.startswith("buy:"):
+        prod_id = int(data.split(":")[1])
+        p = db.execute("SELECT * FROM products WHERE id=?", (prod_id,)).fetchone()
+        if not p:
+            answer(c["id"], "المنتج غير موجود")
+            return
+        set_state(uid, "await_buyer_info", {"product_id": p[0], "merchant_id": p[1], "price": p[3], "prod_name": p[2]})
+        send(chat, f"أنت ستشتري: {p[2]} - {p[3]} جنيه\n\nأرسل معلومات التوصيل بهذا الشكل:\nالاسم - رقم الهاتف - العنوان كامل")
+        answer(c["id"])
+        return
+
+    if data.startswith("admin_m_ok:") and is_admin:
+        mid_t = int(data.split(":")[1])
+        db.execute("UPDATE merchants SET status='approved' WHERE user_id=?", (mid_t,)); db.commit()
+        edit(chat, mid, f"تم قبول التاجر {mid_t} ✅")
+        send(mid_t, "🎉 مبروك! تم قبول متجرك. الآن يمكنك رفع المنتجات عبر /add_product")
+        answer(c["id"]); return
+
+    if data.startswith("admin_m_no:") and is_admin:
+        mid_t = int(data.split(":")[1])
+        db.execute("UPDATE merchants SET status='rejected' WHERE user_id=?", (mid_t,)); db.commit()
+        edit(chat, mid, f"تم رفض التاجر {mid_t} ❌")
+        send(mid_t, "نأسف، تم رفض طلب متجرك. تواصل مع الإدارة.")
+        answer(c["id"]); return
+
+    if data.startswith("admin_p_ok:") and is_admin:
+        pid = int(data.split(":")[1])
+        db.execute("UPDATE products SET status='approved' WHERE id=?", (pid,)); db.commit()
+        p = db.execute("SELECT * FROM products WHERE id=?", (pid,)).fetchone()
+        edit(chat, mid, f"تم نشر المنتج {p[2]} ✅")
+        if p: send(p[1], f"✅ تم قبول منتجك {p[2]} ونشره في السوق")
+        answer(c["id"]); return
+
+    if data.startswith("admin_p_no:") and is_admin:
+        pid = int(data.split(":")[1])
+        db.execute("UPDATE products SET status='rejected' WHERE id=?", (pid,)); db.commit()
+        edit(chat, mid, f"تم رفض المنتج {pid} ❌")
+        answer(c["id"]); return
+
+    if data.startswith("admin_o_ok:") and is_admin:
+        oid = int(data.split(":")[1])
+        o = db.execute("SELECT * FROM orders WHERE id=?", (oid,)).fetchone()
+        db.execute("UPDATE orders SET status='confirmed' WHERE id=?", (oid,)); db.commit()
+        edit(chat, mid, f"تم تأكيد الطلب #{oid} ✅")
+        if o:
+            send(o[1], f"✅ تم تأكيد دفعك للطلب #{oid}. طلبك قيد التجهيز والتوصيل.")
+            send(o[3], f"🔔 عندك طلب جديد مؤكد #{oid}\nمعلومات المشتري: {o[4]}\nتواصل معه وسلمه، عمولتك 90%")
+        answer(c["id"]); return
+
+    if data.startswith("admin_o_no:") and is_admin:
+        oid = int(data.split(":")[1])
+        db.execute("UPDATE orders SET status='rejected' WHERE id=?", (oid,)); db.commit()
+        o = db.execute("SELECT * FROM orders WHERE id=?", (oid,)).fetchone()
+        edit(chat, mid, f"تم رفض الطلب #{oid} ❌")
+        if o: send(o[1], f"❌ تم رفض إشعار الدفع للطلب #{oid}. تأكد من المبلغ وأعد المحاولة أو تواصل مع الإدارة.")
+        answer(c["id"]); return
+
+    if data == "admin:panel" and is_admin:
+        show_admin(chat, mid, edit_mode=True)
+        answer(c["id"]); return
+    if data == "home":
+        edit(chat, mid, "🏠 الرئيسية\n\nاختر:", [[{"text": "🛍️ مشتري", "callback_data": "role:buyer"}, {"text": "🏪 تاجر", "callback_data": "role:merchant"}]])
+        answer(c["id"]); return
+
+def show_admin(chat, mid=None, edit_mode=False):
+    m_count = db.execute("SELECT COUNT(*) FROM merchants WHERE status='pending'").fetchone()[0]
+    p_count = db.execute("SELECT COUNT(*) FROM products WHERE status='pending'").fetchone()[0]
+    o_count = db.execute("SELECT COUNT(*) FROM orders WHERE status='pending_admin'").fetchone()[0]
+    text = f"👑 لوحة الإدارة\n\n🕒 تجار بانتظار: {m_count}\n📦 منتجات بانتظار: {p_count}\n💰 طلبات بانتظار تأكيد دفع: {o_count}\n\n{BANKAK_INFO}"
+    kb = [[{"text": f"تجار ({m_count})", "callback_data": "admin_list_m"}, {"text": f"منتجات ({p_count})", "callback_data": "admin_list_p"}]]
+    if edit_mode: edit(chat, mid, text, kb)
+    else: send(chat, text, kb)
 
 def main():
     keep_alive()
     offset = 0
-    print("البوت يعمل...")
+    print("Marketplace Bot يعمل...")
     while True:
         try:
             r = api("getUpdates", {"timeout": 30, "offset": offset})
@@ -182,8 +316,8 @@ def main():
                 elif "callback_query" in u:
                     handle_callback(u["callback_query"])
         except Exception as e:
-            print("خطأ اتصال مؤقت:", e)
+            print("خطأ:", e)
             time.sleep(2)
 
-if __name__=="__main__":
+if __name__ == "__main__":
     main()
