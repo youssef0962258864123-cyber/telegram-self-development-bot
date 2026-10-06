@@ -167,22 +167,20 @@ def handle_callback(c):
         r=get(uid);edit(chat,mid,f"👤 ملفي\n\nالمستوى: {r[3]}\nXP: {r[2]}\nطلبات الوجه: {len(chosen(uid,'face'))}\nالعادات: {len(chosen(uid,'habit'))}\nأهداف الجسم: {len(chosen(uid,'body'))}",main_kb());answer(c["id"]);return
     if data=="home:workouts":
         edit(chat,mid,"🏋️ تماريني\n\nنظام 30 يومًا سيبدأ من الأسهل ثم يتدرج للأصعب.\n\nاليوم 1:\n• Squat × 8\n• Push-up على سطح مرتفع × 6\n• Plank 15 ثانية\n\nسنضيف مكتبة التمارين الكاملة في المرحلة التالية.",main_kb());answer(c["id"]);return
-
 def main():
-        keep_alive()
+    keep_alive()
     offset = 0
     print("البوت يعمل...")
     while True:
         try:
-            r = api("getUpdates", {"timeout": 10, "offset": offset}, timeout=15)
+            r = api("getUpdates", {"time
             for u in r.get("result", []):
                 offset = u["update_id"] + 1
                 if "message" in u:
-                    handle_message(u["message"])
+                    handle_message(u["me
                 elif "callback_query" in u:
-                    handle_callback(u["callback_query"])
+                    handle_callback(u["c
         except Exception as e:
             print("خطأ اتصال مؤقت:", e)
             time.sleep(2)
-
 if __name__=="__main__": main()
