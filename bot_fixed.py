@@ -1,57 +1,109 @@
 from keep_alive import keep_alive
-import os, json, time, sqlite3
+import os
+import json
+import time
+import sqlite3
 from urllib.request import Request, urlopen
 from urllib.parse import urlencode
 
+# ================== الإعدادات ==================
 TOKEN = os.environ.get("BOT_TOKEN")
-ADMIN_ID = int(os.environ.get("ADMIN_ID", os.environ.get("YOUR_CHAT_ID", "0")))
+ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
+
 if not TOKEN:
     raise SystemExit("BOT_TOKEN غير موجود")
 
 API = f"https://api.telegram.org/bot{TOKEN}"
 DB = "marketplace.db"
 
-BANKAK_INFO = "بنكك: 1234567 - باسم يوسف - 10% عمولة المنصة"
-CATEGORIES = ["👕 ملابس", "🍳 أواني منزلية", "🔥 عروض وخصم", "⭐ رائج - موضة", "📱 إلكترونيات", "📦 أخرى"]
+# الأقسام الجديدة حسب طلبك
+CATEGORIES = [
+    "👕 ملابس",
+    "🍳 أواني منزلية",
+    "🔥 عروض وخصم",
+    "⭐ رائج",
+    "👗 موضة",
+    "📦 أخرى"
+]
 
+# ================== قاعدة البيانات ==================
 db = sqlite3.connect(DB, check_same_thread=False)
-db.executescript("""
-CREATE TABLE IF NOT EXISTS users(user_id INTEGER PRIMARY KEY, role TEXT, state TEXT, temp_data TEXT);
-CREATE TABLE IF NOT EXISTS merchants(user_id INTEGER PRIMARY KEY, store_name TEXT, phone TEXT, city TEXT, status TEXT DEFAULT 'pending');
-CREATE TABLE IF NOT EXISTS products(id INTEGER PRIMARY KEY AUTOINCREMENT, merchant_id INTEGER, name TEXT, price INTEGER, photo_id TEXT, description TEXT, category TEXT, status TEXT DEFAULT 'pending');
-CREATE TABLE IF NOT EXISTS orders(id INTEGER PRIMARY KEY AUTOINCREMENT, buyer_id INTEGER, product_id INTEGER, merchant_id INTEGER, buyer_info TEXT, photo_proof TEXT, status TEXT DEFAULT 'awaiting_proof');
-""")
-# تحديث للجداول القديمة لو ما فيها category
-try:
-    db.execute("ALTER TABLE products ADD COLUMN category TEXT")
-    db.commit()
-except:
-    pass
 
+# إنشاء الجداول
+db.executescript("""
+CREATE TABLE IF NOT EXISTS users(
+    user_id INTEGER PRIMARY KEY,
+    state TEXT,
+    temp TEXT
+);
+
+CREATE TABLE IF NOT EXISTS merchants(
+    user_id INTEGER PRIMARY KEY,
+    store_name TEXT,
+    phone TEXT,
+    city TEXT,
+    status TEXT DEFAULT 'pending'
+);
+
+CREATE TABLE IF NOT EXISTS products(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    merchant_id INTEGER,
+    name TEXT,
+    price INTEGER,
+    photo_id TEXT,
+    description TEXT,
+    category TEXT,
+    status TEXT DEFAULT 'pending'
+);
+
+CREATE TABLE IF NOT EXISTS orders(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    buyer_id INTEGER,
+    product_id INTEGER,
+    merchant_id INTEGER,
+    buyer_info TEXT,
+    payment_type TEXT,
+    status TEXT
+);
+""")
+db.commit()
+
+# ================== دوال التليجرام ==================
 def api(method, data=None):
     data = data or {}
-    req = Request(API + "/" + method, data=urlencode(data).encode(), headers={"Content-Type": "application/x-www-form-urlencoded"})
+    req = Request(
+        API + "/" + method,
+        data=urlencode(data).encode(),
+        headers={"Content-Type": "application/x-www-form-urlencoded"}
+    )
     with urlopen(req, timeout=30) as r:
         return json.loads(r.read())
 
 def send(chat, text, kb=None, photo=None):
+    """إرسال رسالة أو صورة"""
     if photo:
         d = {"chat_id": chat, "photo": photo, "caption": text}
-        if kb: d["reply_markup"] = json.dumps({"inline_keyboard": kb}, ensure_ascii=False)
+        if kb:
+            d["reply_markup"] = json.dumps({"inline_keyboard": kb}, ensure_ascii=False)
         return api("sendPhoto", d)
     else:
         d = {"chat_id": chat, "text": text}
-        if kb: d["reply_markup"] = json.dumps({"inline_keyboard": kb}, ensure_ascii=False)
+        if kb:
+            d["reply_markup"] = json.dumps({"inline_keyboard": kb}, ensure_ascii=False)
         return api("sendMessage", d)
 
 def edit(chat, msg, text, kb=None):
+    """تعديل رسالة (نص أو صورة)"""
     d = {"chat_id": chat, "message_id": msg, "text": text}
-    if kb: d["reply_markup"] = json.dumps({"inline_keyboard": kb}, ensure_ascii=False)
+    if kb:
+        d["reply_markup"] = json.dumps({"inline_keyboard": kb}, ensure_ascii=False)
     try:
         return api("editMessageText", d)
     except:
+        # لو الرسالة صورة، نعدل الكابشن
         d2 = {"chat_id": chat, "message_id": msg, "caption": text}
-        if kb: d2["reply_markup"] = json.dumps({"inline_keyboard": kb}, ensure_ascii=False)
+        if kb:
+            d2["reply_markup"] = json.dumps({"inline_keyboard": kb}, ensure_ascii=False)
         try:
             return api("editMessageCaption", d2)
         except Exception as e:
@@ -61,160 +113,166 @@ def edit(chat, msg, text, kb=None):
 def answer(cid, text=""):
     return api("answerCallbackQuery", {"callback_query_id": cid, "text": text})
 
-def get_user(uid):
-    row = db.execute("SELECT * FROM users WHERE user_id=?", (uid,)).fetchone()
-    if not row:
-        db.execute("INSERT INTO users(user_id, role, state) VALUES(?,?,?)", (uid, None, None))
-        db.commit()
-        return (uid, None, None, None)
-    return row
+# ================== دوال المستخدمين ==================
+def get_temp(uid):
+    row = db.execute("SELECT temp FROM users WHERE user_id=?", (uid,)).fetchone()
+    if row and row[0]:
+        try:
+            return json.loads(row[0])
+        except:
+            return {}
+    return {}
 
 def set_state(uid, state, temp=None):
+    db.execute("INSERT OR IGNORE INTO users(user_id) VALUES(?)", (uid,))
     if temp is not None:
-        db.execute("UPDATE users SET state=?, temp_data=? WHERE user_id=?", (state, json.dumps(temp, ensure_ascii=False), uid))
+        db.execute(
+            "UPDATE users SET state=?, temp=? WHERE user_id=?",
+            (state, json.dumps(temp, ensure_ascii=False), uid)
+        )
     else:
         db.execute("UPDATE users SET state=? WHERE user_id=?", (state, uid))
     db.commit()
 
-def get_temp(uid):
-    row = get_user(uid)
-    if row[3]:
-        try: return json.loads(row[3])
-        except: return {}
-    return {}
+def get_state(uid):
+    row = db.execute("SELECT state FROM users WHERE user_id=?", (uid,)).fetchone()
+    return row[0] if row else None
 
-def get_category_kb(prefix="cat"):
+def get_category_keyboard(prefix):
+    """كيبورد الأقسام"""
     kb = []
     for i in range(0, len(CATEGORIES), 2):
-        row = []
-        row.append({"text": CATEGORIES[i], "callback_data": f"{prefix}:{CATEGORIES[i]}"})
+        row = [{"text": CATEGORIES[i], "callback_data": f"{prefix}:{CATEGORIES[i]}"}]
         if i+1 < len(CATEGORIES):
             row.append({"text": CATEGORIES[i+1], "callback_data": f"{prefix}:{CATEGORIES[i+1]}"})
         kb.append(row)
     return kb
 
+# ================== معالجة الرسائل ==================
 def handle_message(m):
     uid = m["from"]["id"]
     chat = m["chat"]["id"]
     text = m.get("text", "")
-    get_user(uid)
-    is_admin = (ADMIN_ID!= 0 and uid == ADMIN_ID)
-    user = get_user(uid)
-    state = user[2]
+    state = get_state(uid)
     temp = get_temp(uid)
 
+    db.execute("INSERT OR IGNORE INTO users(user_id) VALUES(?)", (uid,))
+    db.commit()
+
+    # --- تسجيل التاجر ---
     if state == "await_store_name":
         temp["store_name"] = text
         set_state(uid, "await_phone", temp)
         send(chat, "تمام ✅\nالآن أرسل رقم واتساب المتجر:")
         return
+
     if state == "await_phone":
         temp["phone"] = text
         set_state(uid, "await_city", temp)
         send(chat, "آخر خطوة، أرسل مدينتك / ولايتك:")
         return
+
     if state == "await_city":
         temp["city"] = text
-        db.execute("INSERT OR REPLACE INTO merchants(user_id, store_name, phone, city, status) VALUES(?,?,?,?,?)",
-                   (uid, temp["store_name"], temp["phone"], temp["city"], "pending"))
+        db.execute(
+            "INSERT OR REPLACE INTO merchants(user_id, store_name, phone, city, status) VALUES(?,?,?,?,?)",
+            (uid, temp["store_name"], temp["phone"], temp["city"], "pending")
+        )
         db.commit()
         set_state(uid, None, {})
-        send(chat, "✅ تم إرسال طلبك للإدارة، سيتم مراجعته خلال ساعات وسيصلك إشعار عند القبول.")
-        if ADMIN_ID!= 0:
-            kb = [[{"text": "✅ قبول التاجر", "callback_data": f"admin_m_ok:{uid}"}, {"text": "❌ رفض", "callback_data": f"admin_m_no:{uid}"}]]
+        send(chat, "✅ تم إرسال طلبك للإدارة، سيتم مراجعته خلال ساعات.")
+        if ADMIN_ID:
+            kb = [[{"text": "✅ قبول التاجر", "callback_data": f"m_ok:{uid}"}, {"text": "❌ رفض", "callback_data": f"m_no:{uid}"}]]
             send(ADMIN_ID, f"🔔 تاجر جديد بانتظار الموافقة:\n\nالمتجر: {temp['store_name']}\nالهاتف: {temp['phone']}\nالمدينة: {temp['city']}\nالايدي: {uid}", kb)
         return
 
+    # --- إضافة منتج ---
     if state == "await_prod_name":
         temp["name"] = text
         set_state(uid, "await_prod_price", temp)
         send(chat, "حلو، الآن أرسل السعر بالأرقام فقط (مثلا 15000):")
         return
+
     if state == "await_prod_price":
         if not text.isdigit():
             send(chat, "أرسل السعر أرقام فقط:")
             return
         temp["price"] = int(text)
-        set_state(uid, "await_prod_category", temp)
-        kb = get_category_kb("setcat")
-        send(chat, "ممتاز، الآن اختر قسم المنتج:", kb)
-        return
-    if state == "await_prod_desc":
-        temp["desc"] = text
-        db.execute("INSERT INTO products(merchant_id, name, price, photo_id, description, category, status) VALUES(?,?,?,?,?,?,?)",
-                   (uid, temp["name"], temp["price"], temp["photo"], temp["desc"], temp.get("category","📦 أخرى"), "pending"))
-        db.commit()
-        set_state(uid, None, {})
-        send(chat, f"✅ تم رفع المنتج في قسم {temp.get('category')}، بانتظار موافقة الإدارة.")
-        if ADMIN_ID!= 0:
-            prod_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
-            kb = [[{"text": "✅ نشر المنتج", "callback_data": f"admin_p_ok:{prod_id}"}, {"text": "❌ رفض", "callback_data": f"admin_p_no:{prod_id}"}]]
-            send(ADMIN_ID, f"🔔 منتج جديد بانتظار الموافقة:\n📦 {temp['name']} - {temp['price']} جنيه\n🏷️ القسم: {temp.get('category')}\n📝 {temp['desc']}", kb, photo=temp["photo"])
+        set_state(uid, "await_prod_cat", temp)
+        send(chat, "ممتاز، الآن اختر قسم المنتج:", get_category_keyboard("setcat"))
         return
 
-    if state == "await_buyer_info":
-        temp["buyer_info"] = text
-        set_state(uid, "await_proof", temp)
-        send(chat, f"تمام، معلوماتك محفوظة.\n\n{BANKAK_INFO}\n\nالسعر الكلي: {temp['price']} جنيه\n\nبعد التحويل، أرسل **صورة إشعار بنكك** هنا:")
+    if state == "await_prod_desc":
+        temp["desc"] = text
+        db.execute(
+            "INSERT INTO products(merchant_id, name, price, photo_id, description, category, status) VALUES(?,?,?,?,?,?,?)",
+            (uid, temp["name"], temp["price"], temp["photo"], temp["desc"], temp.get("cat", "📦 أخرى"), "pending")
+        )
+        db.commit()
+        pid = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        set_state(uid, None, {})
+        send(chat, f"✅ تم رفع المنتج في قسم {temp.get('cat')}، بانتظار موافقة الإدارة.")
+        if ADMIN_ID:
+            kb = [[{"text": "✅ نشر المنتج", "callback_data": f"p_ok:{pid}"}, {"text": "❌ رفض", "callback_data": f"p_no:{pid}"}]]
+            send(ADMIN_ID, f"🔔 منتج جديد بانتظار الموافقة:\n📦 {temp['name']} - {temp['price']} جنيه\n🏷️ القسم: {temp.get('cat')}\n📝 {temp['desc']}", kb, photo=temp["photo"])
+        return
+
+    # --- نظام الدفع الجديد ---
+    if state == "await_cod":
+        db.execute(
+            "INSERT INTO orders(buyer_id, product_id, merchant_id, buyer_info, payment_type, status) VALUES(?,?,?,?,?,?)",
+            (uid, temp["pid"], temp["mid"], text, "عند الاستلام", "confirmed")
+        )
+        db.commit()
+        oid = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        set_state(uid, None, {})
+        send(chat, f"✅ تم تأكيد طلبك #{oid} بنجاح!\n\n💵 طريقة الدفع: عند الاستلام\n📦 المنتج: {temp['pname']}\n\nسيتواصل معك البائع قريبا للتوصيل. شكرا 🙏")
+        send(temp["mid"], f"🔔 طلب جديد #{oid} - دفع عند الاستلام 💵\n\n📦 المنتج: {temp['pname']}\n💰 السعر: {temp['price']} جنيه\n👤 بيانات المشتري: {text}\n\nتواصل مع المشتري فورا!")
+        return
+
+    if state == "await_pre":
+        info = f"رقم الهاتف: {text}"
+        db.execute(
+            "INSERT INTO orders(buyer_id, product_id, merchant_id, buyer_info, payment_type, status) VALUES(?,?,?,?,?,?)",
+            (uid, temp["pid"], temp["mid"], info, "قبل الاستلام", "pending_call")
+        )
+        db.commit()
+        oid = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        set_state(uid, None, {})
+        send(chat, f"✅ تمام! تم حفظ طلبك #{oid}\n\n💳 طريقة الدفع: قبل الاستلام\n📞 رقمك: {text}\n\nالبائع سوف يتصل بك خلال دقائق لتأكيد الطلب.")
+        send(temp["mid"], f"🔔 طلب جديد #{oid} - دفع قبل الاستلام 💳\n\n📦 المنتج: {temp['pname']}\n💰 السعر: {temp['price']} جنيه\n📞 رقم المشتري: {text}\n\n⚠️ اتصل بالمشتري الآن!")
         return
 
     if "photo" in m and state == "await_prod_photo":
-        photo_id = m["photo"][-1]["file_id"]
-        temp["photo"] = photo_id
+        temp["photo"] = m["photo"][-1]["file_id"]
         set_state(uid, "await_prod_name", temp)
         send(chat, "الصورة وصلت ✅\nالآن أرسل اسم المنتج:")
         return
 
-    if "photo" in m and state == "await_proof":
-        photo_id = m["photo"][-1]["file_id"]
-        temp["proof"] = photo_id
-        db.execute("INSERT INTO orders(buyer_id, product_id, merchant_id, buyer_info, photo_proof, status) VALUES(?,?,?,?,?,?)",
-                   (uid, temp["product_id"], temp["merchant_id"], temp["buyer_info"], photo_id, "pending_admin"))
-        db.commit()
-        order_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
-        set_state(uid, None, {})
-        send(chat, "✅ تم استلام إشعار الدفع، الإدارة حتراجعو الآن.")
-        if ADMIN_ID!= 0:
-            kb = [[{"text": "✅ تأكيد الدفع", "callback_data": f"admin_o_ok:{order_id}"}, {"text": "❌ دفع غير صحيح", "callback_data": f"admin_o_no:{order_id}"}]]
-            send(ADMIN_ID, f"💰 طلب جديد #{order_id}\nالمنتج: {temp['prod_name']}\nالمشتري: {temp['buyer_info']}\nالمبلغ: {temp['price']}", kb, photo=photo_id)
-        return
-
+    # --- أوامر ---
     if text.startswith("/start"):
         merch = db.execute("SELECT * FROM merchants WHERE user_id=?", (uid,)).fetchone()
         if merch and merch[4] == "approved":
-            count = db.execute('SELECT COUNT(*) FROM products WHERE merchant_id=? AND status=?',(uid,'approved')).fetchone()[0]
-            kb = [[{"text": "➕ إضافة منتج", "callback_data": "add_prod"}, {"text": "📊 مبيعاتي", "callback_data": "my_sales"}],
-                  [{"text": "🛍️ تصفح السوق كمشتري", "callback_data": "role:buyer"}]]
-            if is_admin: kb.append([{"text": "👑 لوحة الإدارة", "callback_data": "admin:panel"}])
-            send(chat, f"أهلا بك يا صاحب متجر {merch[1]} ✅\nمنتجاتك المنشورة: {count}\n\nلإضافة منتج جديد دوس الزر تحت 👇", kb)
+            cnt = db.execute("SELECT COUNT(*) FROM products WHERE merchant_id=? AND status='approved'", (uid,)).fetchone()[0]
+            kb = [[{"text": "➕ إضافة منتج", "callback_data": "add"}, {"text": "📊 مبيعاتي", "callback_data": "sales"}], [{"text": "🛍️ تصفح السوق", "callback_data": "buyer"}]]
+            send(chat, f"أهلا بك يا صاحب متجر {merch[1]} ✅\n\nمنتجاتك المنشورة: {cnt}\n\nلإضافة منتج جديد دوس الزر تحت 👇", kb)
             return
         if merch and merch[4] == "pending":
-            send(chat, f"مرحب بيك 👋\nمتجرك '{merch[1]}' لسه قيد المراجعة ⏳", [[{"text": "🏠 الرئيسية", "callback_data": "home"}]])
+            send(chat, f"مرحب بيك 👋\nمتجرك '{merch[1]}' لسه قيد المراجعة ⏳")
             return
-        kb = [[{"text": "🛍️ أنا مشتري - تصفح السوق", "callback_data": "role:buyer"}, {"text": "🏪 أنا تاجر - افتح متجر", "callback_data": "role:merchant"}]]
-        if is_admin: kb.append([{"text": "👑 لوحة الإدارة", "callback_data": "admin:panel"}])
+        kb = [[{"text": "🛍️ أنا مشتري - تصفح السوق", "callback_data": "buyer"}, {"text": "🏪 أنا تاجر - افتح متجر", "callback_data": "merchant"}]]
         send(chat, "أهلا بك في سوق طوّر نفسك 🌟\n\nاختر هل أنت مشتري أم تاجر؟", kb)
         return
 
-    if text.startswith("/add_product"):
-        merch = db.execute("SELECT * FROM merchants WHERE user_id=?", (uid,)).fetchone()
-        if not merch or merch[4]!= "approved":
-            send(chat, "متجرك لم تتم الموافقة عليه بعد.")
-            return
-        set_state(uid, "await_prod_photo", {})
-        send(chat, "لإضافة منتج جديد، أرسل صورة المنتج أولاً:")
-        return
-
+# ================== معالجة الأزرار ==================
 def handle_callback(c):
     uid = c["from"]["id"]
     chat = c["message"]["chat"]["id"]
     mid = c["message"]["message_id"]
     data = c["data"]
-    get_user(uid)
-    is_admin = (ADMIN_ID!= 0 and uid == ADMIN_ID)
 
-    if data == "role:buyer":
-        kb = get_category_kb("browse")
+    if data == "buyer":
+        kb = get_category_keyboard("browse")
         kb.append([{"text": "🔍 عرض كل المنتجات", "callback_data": "browse:all"}])
         kb.append([{"text": "🏠 الرئيسية", "callback_data": "home"}])
         edit(chat, mid, "🛍️ اختر القسم اللي داير تتصفحو:", kb)
@@ -224,32 +282,33 @@ def handle_callback(c):
     if data.startswith("browse:"):
         cat = data.split(":", 1)[1]
         if cat == "all":
-            products = db.execute("SELECT * FROM products WHERE status='approved' ORDER BY id DESC LIMIT 10").fetchall()
+            prods = db.execute("SELECT * FROM products WHERE status='approved' ORDER BY id DESC LIMIT 10").fetchall()
             title = "كل المنتجات 🛍️"
         else:
-            products = db.execute("SELECT * FROM products WHERE status='approved' AND category=? ORDER BY id DESC LIMIT 10", (cat,)).fetchall()
+            prods = db.execute("SELECT * FROM products WHERE status='approved' AND category=? ORDER BY id DESC LIMIT 10", (cat,)).fetchall()
             title = f"قسم {cat}"
-        if not products:
-            edit(chat, mid, f"{title}\n\nلسه ما في منتجات في القسم دا 🌙", [[{"text": "🔙 رجوع للأقسام", "callback_data": "role:buyer"}]])
+        if not prods:
+            edit(chat, mid, f"{title}\n\nلسه ما في منتجات في القسم دا 🌙", [[{"text": "🔙 رجوع للأقسام", "callback_data": "buyer"}]])
         else:
-            edit(chat, mid, f"{title} - {len(products)} منتج 👇")
-            for p in products[:10]:
-                merch = db.execute("SELECT store_name FROM merchants WHERE user_id=?", (p[1],)).fetchone()
-                store = merch[0] if merch else "متجر"
+            edit(chat, mid, f"{title} - {len(prods)} منتج 👇")
+            for p in prods[:10]:
+                store = db.execute("SELECT store_name FROM merchants WHERE user_id=?", (p[1],)).fetchone()
+                sname = store[0] if store else "متجر"
                 kb = [[{"text": f"🛒 شراء - {p[3]} جنيه", "callback_data": f"buy:{p[0]}"}]]
-                send(chat, f"📦 {p[2]}\n💰 {p[3]} جنيه\n🏷️ {p[6]}\n📝 {p[5]}\n🏪 {store}", kb, photo=p[4])
+                send(chat, f"📦 {p[2]}\n💰 {p[3]} جنيه\n🏷️ {p[6]}\n📝 {p[5]}\n🏪 {sname}", kb, photo=p[4])
         answer(c["id"])
         return
 
-    if data == "role:merchant":
+    if data == "merchant":
         merch = db.execute("SELECT * FROM merchants WHERE user_id=?", (uid,)).fetchone()
         if merch:
             if merch[4] == "pending":
-                edit(chat, mid, "طلبك قيد المراجعة ⏳", [[{"text": "🏠 الرئيسية", "callback_data": "home"}]])
+                edit(chat, mid, "طلبك قيد المراجعة، انتظر موافقة الإدارة ⏳", [[{"text": "🏠 الرئيسية", "callback_data": "home"}]])
             elif merch[4] == "approved":
-                edit(chat, mid, f"أهلا بك يا صاحب متجر {merch[1]} ✅", [[{"text": "➕ إضافة منتج", "callback_data": "add_prod"}, {"text": "🛍️ تصفح السوق", "callback_data": "role:buyer"}]])
+                cnt = db.execute("SELECT COUNT(*) FROM products WHERE merchant_id=? AND status='approved'", (uid,)).fetchone()[0]
+                edit(chat, mid, f"أهلا بك يا صاحب متجر {merch[1]} ✅\n\nمنتجاتك: {cnt}", [[{"text": "➕ إضافة منتج", "callback_data": "add"}, {"text": "📊 مبيعاتي", "callback_data": "sales"}]])
             else:
-                edit(chat, mid, "تم رفض متجرك.", [[{"text": "🏠 الرئيسية", "callback_data": "home"}]])
+                edit(chat, mid, "تم رفض متجرك، تواصل مع الإدارة.", [[{"text": "🏠 الرئيسية", "callback_data": "home"}]])
         else:
             set_state(uid, "await_store_name", {})
             edit(chat, mid, "لفتح متجر جديد، أرسل اسم المتجر:")
@@ -258,88 +317,134 @@ def handle_callback(c):
 
     if data.startswith("setcat:"):
         cat = data.split(":", 1)[1]
-        temp = get_temp(uid)
-        temp["category"] = cat
-        set_state(uid, "await_prod_desc", temp)
+        tmp = get_temp(uid)
+        tmp["cat"] = cat
+        set_state(uid, "await_prod_desc", tmp)
         edit(chat, mid, f"اخترت قسم {cat} ✅\n\nالآن أرسل وصف قصير للمنتج:")
         answer(c["id"])
         return
 
-    if data == "add_prod":
+    if data == "add":
         set_state(uid, "await_prod_photo", {})
-        send(chat, "أرسل صورة المنتج:")
+        send(chat, "لإضافة منتج جديد، أرسل صورة المنتج أولاً:")
         answer(c["id"])
         return
 
+    if data == "sales":
+        total = db.execute("SELECT COUNT(*) FROM orders WHERE merchant_id=?", (uid,)).fetchone()[0]
+        conf = db.execute("SELECT COUNT(*) FROM orders WHERE merchant_id=? AND status='confirmed'", (uid,)).fetchone()[0]
+        pend = db.execute("SELECT COUNT(*) FROM orders WHERE merchant_id=? AND status LIKE 'pending%'", (uid,)).fetchone()[0]
+        cnt = db.execute("SELECT COUNT(*) FROM products WHERE merchant_id=? AND status='approved'", (uid,)).fetchone()[0]
+        rows = db.execute("SELECT p.price FROM orders o JOIN products p ON o.product_id=p.id WHERE o.merchant_id=? AND o.status='confirmed'", (uid,)).fetchall()
+        prof = sum([r[0] for r in rows]) * 0.9 if rows else 0
+        text = f"📊 مبيعاتك يا صاحب المتجر:\n\n📦 منتجاتك المنشورة: {cnt}\n🛒 إجمالي الطلبات: {total}\n✅ طلبات مؤكدة: {conf}\n⏳ بانتظار: {pend}\n💰 أرباحك (90%): {int(prof)} جنيه"
+        kb = [[{"text": "📋 عرض آخر الطلبات", "callback_data": "orders"}, {"text": "🏠 الرئيسية", "callback_data": "home"}]]
+        edit(chat, mid, text, kb)
+        answer(c["id"])
+        return
+
+    if data == "orders":
+        ords = db.execute("SELECT * FROM orders WHERE merchant_id=? ORDER BY id DESC LIMIT 5", (uid,)).fetchall()
+        if not ords:
+            edit(chat, mid, "لسه ما جاك أي طلب 🌙", [[{"text": "🔙 رجوع", "callback_data": "sales"}]])
+        else:
+            t = "📋 آخر 5 طلبات:\n\n"
+            for o in ords:
+                prod = db.execute("SELECT name FROM products WHERE id=?", (o[2],)).fetchone()
+                pn = prod[0] if prod else f"منتج #{o[2]}"
+                emoji = "✅" if o[6] == "confirmed" else "⏳"
+                t += f"{emoji} #{o[0]} - {pn}\nالدفع: {o[5]}\nالمشتري: {o[4][:30]}...\n\n"
+            edit(chat, mid, t, [[{"text": "🔙 رجوع", "callback_data": "sales"}]])
+        answer(c["id"])
+        return
+
+    # شراء مع خيارين دفع
     if data.startswith("buy:"):
-        prod_id = int(data.split(":")[1])
-        p = db.execute("SELECT * FROM products WHERE id=?", (prod_id,)).fetchone()
+        pid = int(data.split(":")[1])
+        p = db.execute("SELECT * FROM products WHERE id=?", (pid,)).fetchone()
         if not p:
             answer(c["id"], "المنتج غير موجود")
             return
-        set_state(uid, "await_buyer_info", {"product_id": p[0], "merchant_id": p[1], "price": p[3], "prod_name": p[2]})
-        send(chat, f"أنت ستشتري: {p[2]} - {p[3]} جنيه\n\nأرسل معلومات التوصيل:\nالاسم - رقم الهاتف - العنوان كامل")
+        set_state(uid, "choice", {"pid": p[0], "mid": p[1], "price": p[3], "pname": p[2]})
+        kb = [[{"text": "💵 الدفع عند الاستلام", "callback_data": f"cod:{p[0]}"}], [{"text": "💳 الدفع قبل الاستلام", "callback_data": f"pre:{p[0]}"}]]
+        send(chat, f"📦 {p[2]}\n💰 {p[3]} جنيه\n\nاختر طريقة الدفع:", kb)
         answer(c["id"])
         return
 
-    if data.startswith("admin_m_ok:") and is_admin:
+    if data.startswith("cod:"):
+        tmp = get_temp(uid)
+        set_state(uid, "await_cod", tmp)
+        send(chat, "💵 اخترت الدفع عند الاستلام\n\nأرسل معلومات التوصيل بهذا الشكل:\nالاسم - رقم الهاتف - العنوان كامل\n\nمثال: محمد 0912345678 الخرطوم بحري")
+        answer(c["id"])
+        return
+
+    if data.startswith("pre:"):
+        tmp = get_temp(uid)
+        set_state(uid, "await_pre", tmp)
+        send(chat, "💳 اخترت الدفع قبل الاستلام\n\nأرسل رقم هاتفك فقط، وسيقوم البائع بالاتصال بك لتأكيد الطلب وطريقة التحويل (بنكك).\n\nمثال: 0912345678")
+        answer(c["id"])
+        return
+
+    # إدارة
+    if data.startswith("m_ok:"):
         mid_t = int(data.split(":")[1])
-        db.execute("UPDATE merchants SET status='approved' WHERE user_id=?", (mid_t,)); db.commit()
+        db.execute("UPDATE merchants SET status='approved' WHERE user_id=?", (mid_t,))
+        db.commit()
         edit(chat, mid, f"تم قبول التاجر {mid_t} ✅")
-        send(mid_t, "🎉 مبروك! تم قبول متجرك. /start لإضافة منتجات")
-        answer(c["id"], "تم القبول"); return
+        send(mid_t, "🎉 مبروك! تم قبول متجرك. الآن /start لإضافة منتجات")
+        answer(c["id"], "تم القبول")
+        return
 
-    if data.startswith("admin_m_no:") and is_admin:
+    if data.startswith("m_no:"):
         mid_t = int(data.split(":")[1])
-        db.execute("UPDATE merchants SET status='rejected' WHERE user_id=?", (mid_t,)); db.commit()
+        db.execute("UPDATE merchants SET status='rejected' WHERE user_id=?", (mid_t,))
+        db.commit()
         edit(chat, mid, f"تم رفض التاجر {mid_t} ❌")
-        answer(c["id"]); return
+        answer(c["id"])
+        return
 
-    if data.startswith("admin_p_ok:") and is_admin:
+    if data.startswith("p_ok:"):
         pid = int(data.split(":")[1])
-        db.execute("UPDATE products SET status='approved' WHERE id=?", (pid,)); db.commit()
+        db.execute("UPDATE products SET status='approved' WHERE id=?", (pid,))
+        db.commit()
         p = db.execute("SELECT * FROM products WHERE id=?", (pid,)).fetchone()
         edit(chat, mid, f"✅ تم نشر المنتج: {p[2] if p else pid}")
-        if p: send(p[1], f"✅ تم نشر منتجك {p[2]} في السوق")
-        answer(c["id"], "تم النشر ✅"); return
+        if p:
+            send(p[1], f"✅ تم قبول منتجك {p[2]} ونشره في السوق")
+        answer(c["id"], "تم النشر ✅")
+        return
 
-    if data.startswith("admin_p_no:") and is_admin:
+    if data.startswith("p_no:"):
         pid = int(data.split(":")[1])
-        db.execute("UPDATE products SET status='rejected' WHERE id=?", (pid,)); db.commit()
+        db.execute("UPDATE products SET status='rejected' WHERE id=?", (pid,))
+        db.commit()
         edit(chat, mid, f"تم رفض المنتج {pid} ❌")
-        answer(c["id"]); return
-
-    if data.startswith("admin_o_ok:") and is_admin:
-        oid = int(data.split(":")[1])
-        o = db.execute("SELECT * FROM orders WHERE id=?", (oid,)).fetchone()
-        db.execute("UPDATE orders SET status='confirmed' WHERE id=?", (oid,)); db.commit()
-        edit(chat, mid, f"تم تأكيد الطلب #{oid} ✅")
-        if o:
-            send(o[1], f"✅ تم تأكيد دفعك للطلب #{oid}.")
-            send(o[3], f"🔔 طلب مؤكد #{oid}\nالمشتري: {o[4]}")
-        answer(c["id"]); return
-
-    if data.startswith("admin_o_no:") and is_admin:
-        oid = int(data.split(":")[1])
-        db.execute("UPDATE orders SET status='rejected' WHERE id=?", (oid,)); db.commit()
-        edit(chat, mid, f"تم رفض الطلب #{oid} ❌")
-        answer(c["id"]); return
+        answer(c["id"])
+        return
 
     if data == "home":
-        edit(chat, mid, "🏠 الرئيسية\nاختر:", [[{"text": "🛍️ مشتري", "callback_data": "role:buyer"}, {"text": "🏪 تاجر", "callback_data": "role:merchant"}]])
-        answer(c["id"]); return
+        merch = db.execute("SELECT * FROM merchants WHERE user_id=?", (uid,)).fetchone()
+        if merch and merch[4] == "approved":
+            edit(chat, mid, f"🏠 لوحة التاجر {merch[1]}", [[{"text": "➕ إضافة منتج", "callback_data": "add"}, {"text": "📊 مبيعاتي", "callback_data": "sales"}], [{"text": "🛍️ تصفح كمشتري", "callback_data": "buyer"}]])
+        else:
+            edit(chat, mid, "🏠 الرئيسية\nاختر:", [[{"text": "🛍️ مشتري", "callback_data": "buyer"}, {"text": "🏪 تاجر", "callback_data": "merchant"}]])
+        answer(c["id"])
+        return
 
+# ================== التشغيل ==================
 def main():
     keep_alive()
     offset = 0
-    print("Marketplace Bot V2 بالأقسام يعمل...")
+    print("Marketplace Bot V5 - 300 سطر يعمل...")
     while True:
         try:
             r = api("getUpdates", {"timeout": 30, "offset": offset})
             for u in r.get("result", []):
                 offset = u["update_id"] + 1
-                if "message" in u: handle_message(u["message"])
-                elif "callback_query" in u: handle_callback(u["callback_query"])
+                if "message" in u:
+                    handle_message(u["message"])
+                elif "callback_query" in u:
+                    handle_callback(u["callback_query"])
         except Exception as e:
             print("خطأ:", e)
             time.sleep(2)
