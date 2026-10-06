@@ -173,7 +173,7 @@ def main():
     print("البوت يعمل...")
     while True:
         try:
-            r = api("getUpdates", {"time
+            r = api("getUpdates", {"timeout": 30, "offset": offset})
             for u in r.get("result", []):
                 offset = u["update_id"] + 1
                 if "message" in u:
