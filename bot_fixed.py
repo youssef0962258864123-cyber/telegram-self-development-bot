@@ -10,7 +10,12 @@ def run():
     app.run(host='0.0.0.0', port=10000)
 
 threading.Thread(target=run).start()
-from keep_alive import keep_alive
+try:
+    from keep_alive import keep_alive
+except ImportError:
+    # Flask starts above in its own thread, so the bot can still run without the optional helper module.
+    def keep_alive():
+        return None
 import os
 import json
 import time
@@ -909,9 +914,4 @@ def handle_cb(c):
             t = "📋 آخر 5:\n\n"
             for o in ords:
                 t += f"#{o[0]} - {o[1]}ج عمولة {o[2]}ج {o[3]}\n"
-            edit(chat, mid, t, [[{"text":"🔙 رجوع","callback_data":"sales"}]])
-        answer(c["id"])
-        return
-    if data.startswith("buy:"):
-        pid = int(data.split(":")[1])
-        p = db.execute("SELECT * FROM products WHERE id=?
+            edit(chat, mid, t, [[{"text":"🔙 رجوع","callback_data":"s
