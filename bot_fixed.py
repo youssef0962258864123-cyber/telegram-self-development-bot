@@ -31,7 +31,7 @@ REFERRAL_RATE = 4
 API = f"https://api.telegram.org/bot{TOKEN}"
 DB = "marketplace.db"
 
-CATEGORIES = ["👕 ملابس", "🍳 أواني منزلية", "🔥 عروض وخصم", "⭐ رائج", "👗 موضة", "📦 أخرى", "🐄 أعلاف حيوانات", "💄 منتجات تجميل", "🌱 أسمدة زراعية", "🏋️ منتجات جيم"]
+CATEGORIES = ["👕 ملابس", "🍳 أواني منزلية", "🔥 عروض وخصم", "⭐ رائج", "👗 موضة", "📦 أخرى", "🌾 أعلاف حيوانات", "💄 منتجات تجميل", "🌱 أسمدة زراعية", "💪 منتجات جيم"]
 
 db = sqlite3.connect(DB, check_same_thread=False)
 db.executescript('''
@@ -103,10 +103,18 @@ def send(chat_id, text, kb=None, photo=None, main_kb=False):
     if kb:
         payload["reply_markup"] = json.dumps({"inline_keyboard": kb}, ensure_ascii=False)
     elif main_kb:
-        keyboard = [
-            ["🛍️ تسوق", "🔍 بحث عن منتج"],
-            ["🏪 إنشاء حساب تاجر", "💰 الربح من البوت"]
-        ]
+        merchant_row = db.execute("SELECT status FROM merchants WHERE user_id=?", (chat_id,)).fetchone()
+        if merchant_row:
+            store_button = "🏪 لوحة متجري" if merchant_row[0] == "approved" else "🏪 حالة متجري"
+            keyboard = [
+                ["🛍️ تسوق", "🔍 بحث عن منتج"],
+                [store_button]
+            ]
+        else:
+            keyboard = [
+                ["🛍️ تسوق", "🔍 بحث عن منتج"],
+                ["🏪 إنشاء حساب تاجر", "💰 الربح من البوت"]
+            ]
         if chat_id == ADMIN_ID and ADMIN_ID:
             keyboard.append(["👑 لوحة الأدمن"])
         payload["reply_markup"] = json.dumps({"keyboard": keyboard, "resize_keyboard": True}, ensure_ascii=False)
@@ -276,8 +284,7 @@ def open_merchant(chat_id, uid, message_id=None):
             keyboard = [
                 [{"text": "➕ إضافة منتج", "callback_data": "add"}, {"text": "📊 مبيعاتي", "callback_data": "sales"}],
                 [{"text": f"📦 طلبات تحت الشحن ({pending_orders})", "callback_data": "my_pending"}],
-                [{"text": "🛍️ تصفح السوق", "callback_data": "buyer"}],
-                [{"text": "💰 أرباح الإحالة", "callback_data": "my_referral_earnings"}]
+                [{"text": "🛍️ تصفح السوق", "callback_data": "buyer"}]
             ]
             if uid == ADMIN_ID and ADMIN_ID:
                 keyboard.append([{"text": "👑 لوحة الأدمن", "callback_data": "admin_panel"}])
@@ -320,6 +327,9 @@ def handle_msg(m):
         show_merchant_intro(chat)
         return
     if txt in ["✅ أنا تاجر الآن", "أنا تاجر الآن"]:
+        open_merchant(chat, uid)
+        return
+    if txt in ["🏪 لوحة متجري", "🏪 حالة متجري", "لوحة متجري"]:
         open_merchant(chat, uid)
         return
     if txt in ["👑 لوحة الأدمن", "/admin"] and uid==ADMIN_ID:
@@ -513,7 +523,7 @@ def handle_msg(m):
         if merchant_row and merchant_row[0] == "approved":
             open_merchant(chat, uid)
             return
-        send(chat, "مرحبا بك في سوق السودان 🇸🇩\nهنا ستجد ما تريده إن شاء الله وبأقل الأسعار.", main_kb=True)
+        send(chat, "مرحبا بك في سوق السودان \nهنا ستجد ما تريده إن شاء الله وبأقل الأسعار.", main_kb=True)
         return
     if len(txt)>=2 and st is None and txt not in ["📊 حسابي","💰 تفعيل الربح","☎️ خدمة العملاء","🔄 تحديث /start","🔍 بحث","🔍 بحث عن منتج","بحث عن منتج","🛍️ تسوق","تسوق","🏪 إنشاء حساب تاجر","إنشاء حساب تاجر","💰 الربح من البوت","أنا تاجر الآن","حسابي"]:
         do_search(chat, txt)
@@ -833,8 +843,12 @@ def handle_cb(c):
         answer(c["id"])
         return
     if data=="home":
-        edit(chat, mid, "🏠 رجعت إلى القائمة الرئيسية. استخدم الأزرار أسفل الشاشة.", [])
-        send(chat, "مرحبا بك في سوق السودان 🇸🇩\nهنا ستجد ما تريده إن شاء الله وبأقل الأسعار.", main_kb=True)
+        merchant_row = db.execute("SELECT status FROM merchants WHERE user_id=?", (uid,)).fetchone()
+        if merchant_row and merchant_row[0] in ["approved", "pending", "banned"]:
+            open_merchant(chat, uid, mid)
+        else:
+            edit(chat, mid, "مرحبا بك في سوق السودان\nهنا ستجد ما تريده إن شاء الله وبأقل الأسعار.", [])
+            send(chat, "مرحبا بك في سوق السودان\nهنا ستجد ما تريده إن شاء الله وبأقل الأسعار.", main_kb=True)
         answer(c["id"])
         return
 
