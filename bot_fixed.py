@@ -15,6 +15,9 @@ import os
 import json
 import time
 import sqlite3
+import re
+import unicodedata
+from difflib import SequenceMatcher
 from urllib.request import Request
 from urllib.request import urlopen
 from urllib.parse import urlencode
@@ -100,7 +103,13 @@ def send(chat_id, text, kb=None, photo=None, main_kb=False):
     if kb:
         payload["reply_markup"] = json.dumps({"inline_keyboard": kb}, ensure_ascii=False)
     elif main_kb:
-        payload["reply_markup"] = json.dumps({"keyboard": [["🔄 تحديث /start", "🔍 بحث"], ["📊 حسابي", "💰 تفعيل الربح"], ["☎️ خدمة العملاء"]], "resize_keyboard": True}, ensure_ascii=False)
+        keyboard = [
+            ["🛍️ تسوق", "🔍 بحث عن منتج"],
+            ["🏪 إنشاء حساب تاجر", "💰 الربح من البوت"]
+        ]
+        if chat_id == ADMIN_ID and ADMIN_ID:
+            keyboard.append(["👑 لوحة الأدمن"])
+        payload["reply_markup"] = json.dumps({"keyboard": keyboard, "resize_keyboard": True}, ensure_ascii=False)
     return api("sendMessage", payload)
 
 def edit(chat_id, msg_id, text, kb=None):
@@ -108,7 +117,7 @@ def edit(chat_id, msg_id, text, kb=None):
     payload["chat_id"] = chat_id
     payload["message_id"] = msg_id
     payload["text"] = text
-    if kb:
+    if kb is not None:
         payload["reply_markup"] = json.dumps({"inline_keyboard": kb}, ensure_ascii=False)
     try:
         return api("editMessageText", payload)
@@ -117,7 +126,7 @@ def edit(chat_id, msg_id, text, kb=None):
         payload2["chat_id"] = chat_id
         payload2["message_id"] = msg_id
         payload2["caption"] = text
-        if kb:
+        if kb is not None:
             payload2["reply_markup"] = json.dumps({"inline_keyboard": kb}, ensure_ascii=False)
         try:
             return api("editMessageCaption", payload2)
@@ -175,19 +184,119 @@ def setup():
     except:
         pass
 
+def normalize_search_text(value):
+    """توحيد أشكال الحروف العربية لتقليل أثر اختلاف الكتابة والتشكيل."""
+    value = unicodedata.normalize("NFKC", str(value or "")).lower()
+    value = re.sub(r"[\u064b-\u065f\u0670\u0640]", "", value)
+    value = value.translate(str.maketrans({"أ": "ا", "إ": "ا", "آ": "ا", "ى": "ي", "ة": "ه", "ؤ": "و", "ئ": "ي"}))
+    return re.sub(r"[^\w\s]", " ", value).strip()
+
+
+def fuzzy_word_score(query_word, product_words):
+    best = 0.0
+    for word in product_words:
+        if query_word == word:
+            return 1.0
+        if min(len(query_word), len(word)) >= 3 and (query_word in word or word in query_word):
+            best = max(best, 0.86)
+        else:
+            best = max(best, SequenceMatcher(None, query_word, word).ratio())
+    return best
+
+
 def do_search(chat_id, query):
-    like = f"%{query}%"
-    prods = db.execute("SELECT * FROM products WHERE status='approved' AND (name LIKE? OR description LIKE? OR category LIKE?) ORDER BY id DESC LIMIT 10", (like, like, like)).fetchall()
-    if not prods:
-        send(chat_id, f"🔍 بحث عن '{query}'\n\n❌ ما لقينا نتائج، جرب كلمة تانية", main_kb=True)
+    normalized_query = normalize_search_text(query)
+    query_words = normalized_query.split()
+    if not query_words:
+        send(chat_id, "أرسل اسم المنتج أو جزءًا من اسمه للبحث.", main_kb=True)
         return
-    send(chat_id, f"🔍 نتائج بحث '{query}' - {len(prods)} منتج 👇", main_kb=True)
-    for p in prods:
-        store = db.execute("SELECT store_name FROM merchants WHERE user_id=?", (p[1],)).fetchone()
-        sname = store[0] if store else "متجر"
-        kb = []
-        kb.append([{"text": f"🛒 شراء {p[3]}ج عند الاستلام", "callback_data": f"buy:{p[0]}"}])
-        send(chat_id, f"📦 {p[2]}\n💰 {p[3]}ج عند الاستلام\n📝 {p[5]}\n🏷️ {p[6]}\n🏪 {sname}", kb, photo=p[4])
+
+    products = db.execute("SELECT * FROM products WHERE status='approved' ORDER BY id DESC").fetchall()
+    ranked = []
+    for product in products:
+        title = normalize_search_text(product[2])
+        description = normalize_search_text(product[5])
+        category = normalize_search_text(product[6])
+        combined = f"{title} {description} {category}"
+        if normalized_query in combined:
+            score = 1.0 + (0.15 if normalized_query in title else 0.0)
+        else:
+            words = combined.split()
+            scores = [fuzzy_word_score(word, words) for word in query_words]
+            thresholds = [0.70 if len(word) == 3 else 0.60 if len(word) >= 4 else 1.0 for word in query_words]
+            matched = sum(score >= threshold for score, threshold in zip(scores, thresholds))
+            coverage = matched / len(query_words)
+            average = sum(scores) / len(scores)
+            if coverage < 0.5 or average < 0.60:
+                continue
+            score = average + (0.12 if any(word in title for word in query_words) else 0.0)
+        ranked.append((score, product))
+
+    ranked.sort(key=lambda item: (item[0], item[1][0]), reverse=True)
+    prods = [item[1] for item in ranked[:10]]
+    if not prods:
+        send(chat_id, f"🔍 نتائج البحث عن «{query}»\n\n❌ ما لقينا نتائج. جرّب كتابة جزء من اسم المنتج أو كلمة قريبة منه.", main_kb=True)
+        return
+    send(chat_id, f"🔍 نتائج البحث عن «{query}» - {len(prods)} منتج 👇", main_kb=True)
+    for product in prods:
+        store = db.execute("SELECT store_name FROM merchants WHERE user_id=?", (product[1],)).fetchone()
+        store_name = store[0] if store else "متجر"
+        kb = [[{"text": f"🛒 شراء {product[3]}ج عند الاستلام", "callback_data": f"buy:{product[0]}"}]]
+        send(chat_id, f"📦 {product[2]}\n💰 {product[3]}ج عند الاستلام\n📝 {product[5]}\n🏷️ {product[6]}\n🏪 {store_name}", kb, photo=product[4])
+
+
+def show_market(chat_id):
+    keyboard = cat_kb("browse")
+    keyboard.append([{"text": "🛍️ كل المنتجات", "callback_data": "browse:all"}])
+    keyboard.append([{"text": "🔍 بحث عن منتج", "callback_data": "search"}])
+    send(chat_id, "🛍️ خدمات التسوق\nاختر قسمًا لتصفح المنتجات، أو افتح كل المنتجات، أو ابحث باسم المنتج:", keyboard)
+
+
+def show_merchant_intro(chat_id):
+    keyboard = [[{"text": "✅ أنا تاجر الآن", "callback_data": "merchant"}]]
+    message = (
+        "🏪 إنشاء حساب تاجر\n\n"
+        "خطوات التسجيل: أرسل اسم المتجر، ثم رقم واتساب، ثم المدينة، وبعدها صورة مستند لإثبات الهوية. "
+        "سيُراجع الطلب قبل تفعيل المتجر.\n\n"
+        f"💰 عمولة السوق {COMMISSION_RATE}٪: أضفها فوق السعر الصافي الذي تريد الحصول عليه. "
+        f"ومنها، تُخصّص {REFERRAL_RATE} نقاط مئوية من قيمة العملية للشخص الذي سجّل المشتري عبر رابطه إذا كان ربح الإحالة مفعّلًا.\n\n"
+        "اضغط «أنا تاجر الآن» للبدء."
+    )
+    send(chat_id, message, keyboard)
+
+
+def open_merchant(chat_id, uid, message_id=None):
+    set_state(uid, None, {})
+    merchant = db.execute("SELECT * FROM merchants WHERE user_id=?", (uid,)).fetchone()
+    if merchant:
+        status = merchant[5] if len(merchant) >= 6 else "pending"
+        if status == "banned":
+            text, keyboard = "🚫 حساب التاجر موقوف. تواصل مع خدمة العملاء.", None
+        elif status == "pending":
+            text, keyboard = f"متجرك «{merchant[1]}» قيد المراجعة ⏳\nستظهر لك خدمات التاجر بعد الموافقة.", None
+        elif status == "approved":
+            product_count = db.execute("SELECT COUNT(*) FROM products WHERE merchant_id=? AND status='approved'", (uid,)).fetchone()[0]
+            pending_orders = db.execute("SELECT COUNT(*) FROM orders WHERE merchant_id=? AND status='pending_shipment'", (uid,)).fetchone()[0]
+            text = f"أهلاً يا صاحب متجر {merchant[1]} ✅\nمنتجاتك: {product_count}\nطلبات قيد الشحن: {pending_orders}\nالعمولة: {COMMISSION_RATE}٪"
+            keyboard = [
+                [{"text": "➕ إضافة منتج", "callback_data": "add"}, {"text": "📊 مبيعاتي", "callback_data": "sales"}],
+                [{"text": f"📦 طلبات تحت الشحن ({pending_orders})", "callback_data": "my_pending"}],
+                [{"text": "🛍️ تصفح السوق", "callback_data": "buyer"}],
+                [{"text": "💰 أرباح الإحالة", "callback_data": "my_referral_earnings"}]
+            ]
+        else:
+            set_state(uid, "await_store_name", {})
+            text = f"تم رفض الطلب السابق. يمكنك إعادة التقديم.\n\nعمولة السوق {COMMISSION_RATE}٪؛ ومن العمولة تُخصّص {REFERRAL_RATE} نقاط مئوية من قيمة العملية للمُحيل إذا كان ربح الإحالة مفعّلًا.\nأرسل اسم المتجر الجديد:"
+            keyboard = None
+    else:
+        set_state(uid, "await_store_name", {})
+        text = f"✅ لنبدأ إنشاء حسابك التجاري.\n\nأرسل اسم المتجر أولًا. بعده سنطلب رقم واتساب، والمدينة، وصورة مستند للمراجعة.\nعمولة السوق {COMMISSION_RATE}٪؛ أضفها فوق السعر الصافي الذي تريده، ومن العمولة تُخصّص {REFERRAL_RATE} نقاط مئوية من قيمة العملية للمُحيل إذا كان ربح الإحالة مفعّلًا."
+        keyboard = None
+
+    if message_id is not None:
+        edit(chat_id, message_id, text, keyboard if keyboard is not None else [])
+    else:
+        send(chat_id, text, keyboard, main_kb=(keyboard is None))
 
 def handle_msg(m):
     uid = m["from"]["id"]
@@ -201,7 +310,35 @@ def handle_msg(m):
     if banned_row and banned_row[0]==1 and uid!=ADMIN_ID:
         send(chat, "🚫 محظور، تواصل: "+ADMIN_CONTACT)
         return
+    if txt in ["🛍️ تسوق", "تسوق", "🛍️ تصفح السوق"]:
+        set_state(uid, None, {})
+        show_market(chat)
+        return
+    if txt in ["🔍 بحث عن منتج", "بحث عن منتج", "🔍 بحث", "بحث", "🔍"]:
+        set_state(uid, "await_search", {})
+        send(chat, "🔍 أرسل اسم المنتج أو جزءًا من اسمه. لا يلزم أن تكتب الاسم بشكل مطابق تمامًا.", main_kb=True)
+        return
+    if txt in ["🏪 إنشاء حساب تاجر", "إنشاء حساب تاجر"]:
+        set_state(uid, None, {})
+        show_merchant_intro(chat)
+        return
+    if txt in ["✅ أنا تاجر الآن", "أنا تاجر الآن"]:
+        open_merchant(chat, uid)
+        return
+    if txt in ["👑 لوحة الأدمن", "/admin"] and uid==ADMIN_ID:
+        send(chat, "👑 افتح لوحة الإدارة:", [[{"text": "👑 لوحة الأدمن", "callback_data": "admin_panel"}]])
+        return
+    if txt in ["💰 الربح من البوت", "الربح من البوت"]:
+        set_state(uid, None, {})
+        db.execute("UPDATE users SET profit_active=1 WHERE user_id=?", (uid,))
+        db.commit()
+        link = f"https://t.me/{BOT_USERNAME}?start={uid}"
+        send(chat, f"🎉 تم تفعيل الربح من البوت بنسبة {REFERRAL_RATE}٪\n\nتكسب {REFERRAL_RATE}٪ من قيمة كل عملية شراء مكتملة يقوم بها شخص سجّل من رابطك.\n\n🔗 رابطك الخاص:\n{link}\n\nشارك الرابط مع الآخرين ليتم تسجيلهم من خلاله.", main_kb=True)
+        return
     if txt in ["🔄 تحديث /start","🔄 تحديث","تحديث","/start","start"]:
+        set_state(uid, None, {})
+        st = None
+        tmp = {}
         txt = "/start"
     if txt in ["📊 حسابي","حسابي"]:
         row = db.execute("SELECT points,purchases,sales,profit_active,referral_earnings,referral_balance FROM users WHERE user_id=?", (uid,)).fetchone()
@@ -230,10 +367,6 @@ def handle_msg(m):
             kb = []
             kb.append([{"text":"✅ نعم فعل الربح 4%","callback_data":"activate_profit"}])
             send(chat, f"💰 تفعيل نظام الربح {REFERRAL_RATE}% مدى الحياة\n\nشارك رابطك: https://t.me/{BOT_USERNAME}?start={uid}\nكل ما يشتري إحالتك، تاخد {REFERRAL_RATE}% مدى الحياة!", kb)
-        return
-    if txt in ["🔍 بحث","بحث","🔍"]:
-        set_state(uid, "await_search", {})
-        send(chat, "🔍 أرسل اسم المنتج اللي عايز تبحث عنو:\nمثال: تيشرت، حلل، تلفون", main_kb=True)
         return
     if txt in ["☎️ خدمة العملاء","خدمة العملاء"]:
         send(chat, f"☎️ خدمة العملاء\n⭐⭐⭐\nتواصل: {ADMIN_CONTACT}", main_kb=True)
@@ -293,7 +426,7 @@ def handle_msg(m):
     if st=="await_city":
         tmp["city"] = txt
         set_state(uid, "await_doc", tmp)
-        send(chat, f"✅ مدينتك {txt}\n\n⚠️ مهم لمنع الاحتيال:\nأرسل صورة مستند (بطاقة/جواز/رخصة)\n\n📌 العمولة {COMMISSION_RATE}% على كل بيع ناجح عند الاستلام\n📌 تفعيل الربح {REFERRAL_RATE}% من إحالاتك مدى الحياة متاح في حسابي")
+        send(chat, f"✅ مدينتك {txt}\n\n⚠️ مهم لمنع الاحتيال:\nأرسل صورة مستند (بطاقة/جواز/رخصة)\n\n📌 عمولة السوق {COMMISSION_RATE}٪ على كل بيع ناجح عند الاستلام. أضفها فوق السعر الصافي الذي تريده.\n📌 من العمولة تُخصّص {REFERRAL_RATE} نقاط مئوية من قيمة العملية للشخص الذي سجّل المشتري عبر رابطه إذا كان الربح مفعّلًا لديه.")
         return
     if st=="await_doc":
         if "photo" not in m:
@@ -374,42 +507,9 @@ def handle_msg(m):
                         send(ref_id, f"🎉 إحالة جديدة!\nشخص سجل عبر رابطك\n+10 نقاط\nإذا فعلت الربح {REFERRAL_RATE}% ستكسب من مشترياته مدى الحياة!")
                     except:
                         pass
-        merch = db.execute("SELECT * FROM merchants WHERE user_id=?", (uid,)).fetchone()
-        if merch:
-            status = merch[5] if len(merch)>=6 and merch[5] in ["pending","approved","banned","rejected_temp","rejected_perm"] else merch[4]
-            if status=="banned":
-                send(chat, f"🚫 محظور", main_kb=True)
-                return
-            if status=="approved":
-                cnt = db.execute("SELECT COUNT(*) FROM products WHERE merchant_id=? AND status='approved'", (uid,)).fetchone()[0]
-                pending_orders = db.execute("SELECT COUNT(*) FROM orders WHERE merchant_id=? AND status='pending_shipment'", (uid,)).fetchone()[0]
-                kb = []
-                kb.append([{"text":"➕ إضافة منتج","callback_data":"add"},{"text":"📊 مبيعاتي","callback_data":"sales"}])
-                kb.append([{"text":f"📦 طلبات تحت الشحن ({pending_orders})","callback_data":"my_pending"}])
-                kb.append([{"text":"🛍️ تصفح السوق","callback_data":"buyer"}])
-                kb.append([{"text":"💰 أرباح الإحالة","callback_data":"my_referral_earnings"}])
-                if uid==ADMIN_ID:
-                    kb.append([{"text":"👑 لوحة الأدمن","callback_data":"admin_panel"}])
-                send(chat, f"أهلا يا صاحب متجر {merch[1]} ✅\nمنتجاتك: {cnt}\nطلبات قيد الشحن: {pending_orders}\nالعمولة: {COMMISSION_RATE}%", kb, main_kb=True)
-                return
-            if status=="pending":
-                send(chat, f"متجرك '{merch[1]}' قيد المراجعة ⏳ مع المستند", main_kb=True)
-                return
-            if status in ["rejected_perm","rejected_temp","rejected"]:
-                reason = merch[6] if len(merch)>6 else merch[5]
-                kb_reapply = []
-                kb_reapply.append([{"text":"🔄 إعادة التقديم","callback_data":"merchant"}])
-                send(chat, f"⏳ تم رفض متجرك. السبب: {reason}", kb_reapply, main_kb=True)
-                return
-        kb = []
-        kb.append([{"text":"🛍️ أنا مشتري","callback_data":"buyer"},{"text":"🏪 أنا تاجر","callback_data":"merchant"}])
-        kb.append([{"text":"🔍 بحث عن منتج","callback_data":"search"},{"text":f"💰 تفعيل الربح {REFERRAL_RATE}%","callback_data":"activate_profit"}])
-        kb.append([{"text":"☎️ خدمة العملاء","callback_data":"support"}])
-        if uid==ADMIN_ID:
-            kb.append([{"text":"👑 لوحة الأدمن","callback_data":"admin_panel"}])
-        send(chat, f"أهلا بك في سوق طوّر نفسك 🌟\n\nللتجار: العمولة {COMMISSION_RATE}% عند البيع + مستند\nللمسوقين: فعل الربح واكسب {REFERRAL_RATE}% من إحالاتك مدى الحياة!\nللمشترين: اكتب اسم المنتج للبحث مباشرة", kb, main_kb=True)
+        send(chat, "مرحبا بك في سوق السودان 🇸🇩\nهنا ستجد ما تريده إن شاء الله وبأقل الأسعار.", main_kb=True)
         return
-    if len(txt)>=2 and st is None and txt not in ["📊 حسابي","💰 تفعيل الربح","☎️ خدمة العملاء","🔄 تحديث /start","🔍 بحث","حسابي"]:
+    if len(txt)>=2 and st is None and txt not in ["📊 حسابي","💰 تفعيل الربح","☎️ خدمة العملاء","🔄 تحديث /start","🔍 بحث","🔍 بحث عن منتج","بحث عن منتج","🛍️ تسوق","تسوق","🏪 إنشاء حساب تاجر","إنشاء حساب تاجر","💰 الربح من البوت","أنا تاجر الآن","حسابي"]:
         do_search(chat, txt)
         return
 
@@ -420,19 +520,14 @@ def handle_cb(c):
     data = c["data"]
     if data=="search":
         set_state(uid, "await_search", {})
-        edit(chat, mid, "🔍 أرسل اسم المنتج اللي عايز تبحث عنو:\nمثال: تيشرت، حلل، تلفون")
+        edit(chat, mid, "🔍 أرسل اسم المنتج أو جزءًا من اسمه. لا يلزم أن تكتب الاسم بشكل مطابق تمامًا.")
         answer(c["id"])
         return
     if data=="activate_profit":
-        row = db.execute("SELECT profit_active FROM users WHERE user_id=?", (uid,)).fetchone()
-        active = row[0] if row else 0
-        if active==1:
-            edit(chat, mid, f"✅ الربح مفعل مسبقا!\nشارك رابطك:\nhttps://t.me/{BOT_USERNAME}?start={uid}\nتكسب {REFERRAL_RATE}% مدى الحياة")
-        else:
-            db.execute("UPDATE users SET profit_active=1 WHERE user_id=?", (uid,))
-            db.commit()
-            link = f"https://t.me/{BOT_USERNAME}?start={uid}"
-            edit(chat, mid, f"🎉 تم تفعيل الربح {REFERRAL_RATE}% مدى الحياة! ✅\n\n🔗 رابطك:\n{link}\n\nشاركه الآن، كل شخص يسجل عبره ويشتري، تاخد {REFERRAL_RATE}% من مشترياته مدى الحياة!")
+        db.execute("UPDATE users SET profit_active=1 WHERE user_id=?", (uid,))
+        db.commit()
+        link = f"https://t.me/{BOT_USERNAME}?start={uid}"
+        edit(chat, mid, f"🎉 تم تفعيل الربح من البوت بنسبة {REFERRAL_RATE}٪\n\nتكسب {REFERRAL_RATE}٪ من قيمة كل عملية شراء مكتملة يقوم بها شخص سجّل من رابطك.\n\n🔗 رابطك الخاص:\n{link}\n\nشارك الرابط مع الآخرين ليتم تسجيلهم من خلاله.")
         answer(c["id"], "تم التفعيل!")
         return
     if data=="my_referral_earnings":
@@ -568,10 +663,10 @@ def handle_cb(c):
         return
     if data=="buyer":
         kb = cat_kb("browse")
-        kb.append([{"text":"🔍 كل المنتجات","callback_data":"browse:all"}])
-        kb.append([{"text":"🔍 بحث بالاسم","callback_data":"search"}])
+        kb.append([{"text":"🛍️ كل المنتجات","callback_data":"browse:all"}])
+        kb.append([{"text":"🔍 بحث عن منتج","callback_data":"search"}])
         kb.append([{"text":"🏠 الرئيسية","callback_data":"home"}])
-        edit(chat, mid, "🛍️ اختر القسم أو ابحث:", kb)
+        edit(chat, mid, "🛍️ خدمات التسوق\nاختر قسمًا، تصفح كل المنتجات، أو ابحث باسم المنتج:", kb)
         answer(c["id"])
         return
     if data.startswith("browse:"):
@@ -595,19 +690,7 @@ def handle_cb(c):
         answer(c["id"])
         return
     if data=="merchant":
-        merch = db.execute("SELECT * FROM merchants WHERE user_id=?", (uid,)).fetchone()
-        if merch:
-            status = merch[5] if len(merch)>=6 and merch[5] in ["pending","approved","banned","rejected_temp","rejected_perm"] else merch[4]
-            if status=="pending":
-                edit(chat, mid, "طلبك قيد المراجعة ⏳ مع المستند")
-            elif status=="approved":
-                edit(chat, mid, f"أهلا {merch[1]} ✅ العمولة {COMMISSION_RATE}%", [[{"text":"➕ إضافة منتج","callback_data":"add"},{"text":"📊 مبيعاتي","callback_data":"sales"}]])
-            else:
-                set_state(uid, "await_store_name", {})
-                edit(chat, mid, f"تم رفضك سابقا. أرسل اسم المتجر الجديد (العمولة {COMMISSION_RATE}%):")
-        else:
-            set_state(uid, "await_store_name", {})
-            edit(chat, mid, f"أرسل اسم المتجر (العمولة {COMMISSION_RATE}% عند البيع عند الاستلام):")
+        open_merchant(chat, uid, mid)
         answer(c["id"])
         return
     if data.startswith("setcat:"):
@@ -715,7 +798,8 @@ def handle_cb(c):
         answer(c["id"])
         return
     if data=="home":
-        edit(chat, mid, "🏠 الرئيسية", [[{"text":"🛍️ مشتري","callback_data":"buyer"},{"text":"🏪 تاجر","callback_data":"merchant"}]])
+        edit(chat, mid, "🏠 رجعت إلى القائمة الرئيسية. استخدم الأزرار أسفل الشاشة.", [])
+        send(chat, "مرحبا بك في سوق السودان 🇸🇩\nهنا ستجد ما تريده إن شاء الله وبأقل الأسعار.", main_kb=True)
         answer(c["id"])
         return
 
