@@ -6,6 +6,7 @@ import time
 import sqlite3
 import re
 import unicodedata
+import traceback
 from difflib import SequenceMatcher
 from urllib.request import Request, urlopen
 from urllib.parse import urlencode
@@ -18,7 +19,9 @@ def home():
     return "Bot is Alive!"
 
 def run():
-    app.run(host='0.0.0.0', port=10000)
+    # استخدام منفذ Render الديناميكي
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
 
 def keep_alive():
     t = threading.Thread(target=run)
@@ -109,7 +112,7 @@ def api(method, data=None):
         with urlopen(req, timeout=30) as res:
             return json.loads(res.read())
     except Exception as e:
-        print(e)
+        print(f"API Error ({method}):", e)
         return {}
 
 def send(chat_id, text, kb=None, photo=None, main_kb=False):
@@ -329,7 +332,7 @@ def handle_msg(m):
     txt = m.get("text", "")
     st = get_state(uid)
     tmp = get_temp(uid)
-    db.execute("INSERT OR IGNORE INTO users(user_id) VALUES(?)", (uid,))
+    db.execute("INSERT OR IGNORE INTO users(user_id) VALUES(? )", (uid,))
     db.commit()
 
     banned_row = db.execute("SELECT is_banned FROM users WHERE user_id=?", (uid,)).fetchone()
@@ -1004,6 +1007,4 @@ def handle_cb(c):
             open_merchant(chat, uid, mid)
         else:
             edit(chat, mid, "مرحبا بك في سوق السودان\nهنا ستجد ما تريده إن شاء الله وبأقل الأسعار.", [])
-            send(chat, "مرحبا بك في سوق السودان\nهنا ستجد ما تريده إن شاء الله وبأقل الأسعار.", main_kb=True)
-        answer(c["id"])
-    
+            
