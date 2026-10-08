@@ -10,12 +10,7 @@ def run():
     app.run(host='0.0.0.0', port=10000)
 
 threading.Thread(target=run).start()
-try:
-    from keep_alive import keep_alive
-except ImportError:
-    # Flask starts above in its own thread, so the bot can still run without the optional helper module.
-    def keep_alive():
-        return None
+from keep_alive import keep_alive
 import os
 import json
 import time
@@ -41,10 +36,9 @@ CATEGORIES = ["👕 ملابس", "🍳 أواني منزلية", "🔥 عروض 
 db = sqlite3.connect(DB, check_same_thread=False)
 db.executescript('''
 CREATE TABLE IF NOT EXISTS users(user_id INTEGER PRIMARY KEY, state TEXT, temp TEXT, points INTEGER DEFAULT 0, purchases INTEGER DEFAULT 0, sales INTEGER DEFAULT 0, referred_by INTEGER, is_banned INTEGER DEFAULT 0, profit_active INTEGER DEFAULT 0, referral_earnings INTEGER DEFAULT 0, referral_balance INTEGER DEFAULT 0);
-CREATE TABLE IF NOT EXISTS merchants(user_id INTEGER PRIMARY KEY, store_name TEXT, phone TEXT, city TEXT, doc_photo TEXT, status TEXT DEFAULT 'pending', reject_reason TEXT, commission_due INTEGER DEFAULT 0);
-CREATE TABLE IF NOT EXISTS products(id INTEGER PRIMARY KEY AUTOINCREMENT, merchant_id INTEGER, name TEXT, price INTEGER, photo_id TEXT, description TEXT, category TEXT, status TEXT DEFAULT 'pending', reject_reason TEXT, base_price INTEGER DEFAULT 0, commission_fee INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS merchants(user_id INTEGER PRIMARY KEY, store_name TEXT, phone TEXT, city TEXT, doc_photo TEXT, status TEXT DEFAULT 'pending', reject_reason TEXT);
+CREATE TABLE IF NOT EXISTS products(id INTEGER PRIMARY KEY AUTOINCREMENT, merchant_id INTEGER, name TEXT, price INTEGER, photo_id TEXT, description TEXT, category TEXT, status TEXT DEFAULT 'pending', reject_reason TEXT);
 CREATE TABLE IF NOT EXISTS orders(id INTEGER PRIMARY KEY AUTOINCREMENT, buyer_id INTEGER, product_id INTEGER, merchant_id INTEGER, price INTEGER, commission INTEGER, referral_comm INTEGER, buyer_info TEXT, status TEXT, created_at TEXT);
-CREATE TABLE IF NOT EXISTS commission_payments(id INTEGER PRIMARY KEY AUTOINCREMENT, merchant_id INTEGER, amount INTEGER, receipt_photo TEXT, status TEXT DEFAULT 'pending', created_at TEXT, reviewed_at TEXT);
 CREATE TABLE IF NOT EXISTS referrals(id INTEGER PRIMARY KEY AUTOINCREMENT, referrer_id INTEGER, referred_id INTEGER, created_at TEXT);
 CREATE TABLE IF NOT EXISTS referral_profits(id INTEGER PRIMARY KEY AUTOINCREMENT, referrer_id INTEGER, buyer_id INTEGER, order_id INTEGER, amount INTEGER, created_at TEXT);
 ''')
@@ -67,16 +61,7 @@ try:
     db.execute("ALTER TABLE merchants ADD COLUMN reject_reason TEXT")
 except: pass
 try:
-    db.execute("ALTER TABLE merchants ADD COLUMN commission_due INTEGER DEFAULT 0")
-except: pass
-try:
     db.execute("ALTER TABLE products ADD COLUMN reject_reason TEXT")
-except: pass
-try:
-    db.execute("ALTER TABLE products ADD COLUMN base_price INTEGER DEFAULT 0")
-except: pass
-try:
-    db.execute("ALTER TABLE products ADD COLUMN commission_fee INTEGER DEFAULT 0")
 except: pass
 try:
     db.execute("ALTER TABLE orders ADD COLUMN price INTEGER")
@@ -295,22 +280,12 @@ def open_merchant(chat_id, uid, message_id=None):
         elif status == "approved":
             product_count = db.execute("SELECT COUNT(*) FROM products WHERE merchant_id=? AND status='approved'", (uid,)).fetchone()[0]
             pending_orders = db.execute("SELECT COUNT(*) FROM orders WHERE merchant_id=? AND status='pending_shipment'", (uid,)).fetchone()[0]
-            due_row = db.execute("SELECT COALESCE(commission_due,0) FROM merchants WHERE user_id=?", (uid,)).fetchone()
-            due = due_row[0] if due_row else 0
-            text = f"أهلاً يا صاحب متجر {merchant[1]} ✅\nمنتجاتك: {product_count}\nطلبات قيد الشحن: {pending_orders}\nالعمولة المستحقة: {due}ج"
-            if due > 0:
-                keyboard = [
-                    [{"text": f"💳 دفع العمولة المستحقة ({due}ج)", "callback_data": "pay_commission"}],
-                    [{"text": "📊 مبيعاتي", "callback_data": "sales"}],
-                    [{"text": f"📦 طلبات تحت الشحن ({pending_orders})", "callback_data": "my_pending"}],
-                    [{"text": "🛍️ تصفح السوق", "callback_data": "buyer"}]
-                ]
-            else:
-                keyboard = [
-                    [{"text": "➕ إضافة منتج", "callback_data": "add"}, {"text": "📊 مبيعاتي", "callback_data": "sales"}],
-                    [{"text": f"📦 طلبات تحت الشحن ({pending_orders})", "callback_data": "my_pending"}],
-                    [{"text": "🛍️ تصفح السوق", "callback_data": "buyer"}]
-                ]
+            text = f"أهلاً يا صاحب متجر {merchant[1]} ✅\nمنتجاتك: {product_count}\nطلبات قيد الشحن: {pending_orders}"
+            keyboard = [
+                [{"text": "➕ إضافة منتج", "callback_data": "add"}, {"text": "📊 مبيعاتي", "callback_data": "sales"}],
+                [{"text": f"📦 طلبات تحت الشحن ({pending_orders})", "callback_data": "my_pending"}],
+                [{"text": "🛍️ تصفح السوق", "callback_data": "buyer"}]
+            ]
             if uid == ADMIN_ID and ADMIN_ID:
                 keyboard.append([{"text": "👑 لوحة الأدمن", "callback_data": "admin_panel"}])
         else:
@@ -446,42 +421,6 @@ def handle_msg(m):
             edit(chat, review_message_id, f"✅ {outcome} طلب {entity} {target_id}.\nالسبب: {reason}", [])
         set_state(uid, None, {})
         return
-    if st=="await_commission_receipt":
-        if "photo" not in m:
-            send(chat, "أرسل صورة واضحة لإيصال التحويل حتى تتم مراجعته.")
-            return
-        receipt_id = m["photo"][-1]["file_id"]
-        amount = int(tmp.get("payment_amount", 0))
-        debt_row = db.execute("SELECT COALESCE(commission_due,0),store_name FROM merchants WHERE user_id=?", (uid,)).fetchone()
-        if not debt_row or debt_row[0] <= 0:
-            set_state(uid, None, {})
-            send(chat, "لا توجد عمولة مستحقة على متجرك حاليًا.", main_kb=True)
-            return
-        pending = db.execute("SELECT id FROM commission_payments WHERE merchant_id=? AND status='pending' LIMIT 1", (uid,)).fetchone()
-        if pending:
-            set_state(uid, None, {})
-            send(chat, "لديك إيصال سداد قيد المراجعة بالفعل. سنبلغك بعد التحقق.", main_kb=True)
-            return
-        amount = min(amount or debt_row[0], debt_row[0])
-        db.execute("INSERT INTO commission_payments(merchant_id,amount,receipt_photo,status,created_at) VALUES(?,?,?,?,?)", (uid, amount, receipt_id, "pending", time.strftime("%Y-%m-%d %H:%M:%S")))
-        db.commit()
-        payment_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
-        set_state(uid, None, {})
-        if not ADMIN_ID:
-            db.execute("UPDATE commission_payments SET status='delivery_failed' WHERE id=?", (payment_id,))
-            db.commit()
-            send(chat, "تعذر إرسال الإيصال للإدارة لأن ADMIN_ID غير مضبوط في إعدادات البوت. لم يُخصم المبلغ من مستحقاتك؛ تواصل مع الإدارة لإتمام المراجعة.", main_kb=True)
-            return
-        kb_payment = [[{"text": "✅ تأكيد وصول المبلغ", "callback_data": f"commission_paid:{payment_id}"}], [{"text": "❌ رفض الإيصال", "callback_data": f"commission_reject:{payment_id}"}]]
-        store_name = debt_row[1] or "متجر"
-        admin_result = send(ADMIN_ID, f"🧾 طلب مراجعة سداد عمولة\nرقم الطلب: {payment_id}\nالتاجر: {store_name}\nID: {uid}\nالمبلغ المعلن: {amount}ج", kb_payment, photo=receipt_id)
-        if not admin_result or not admin_result.get("ok"):
-            db.execute("UPDATE commission_payments SET status='delivery_failed' WHERE id=?", (payment_id,))
-            db.commit()
-            send(chat, "تعذر توصيل الإيصال إلى حساب الإدارة. لم يُرفع التقييد، ولم يُخصم السداد. تأكد أن الأدمن بدأ البوت ثم أعد إرسال الإيصال.", main_kb=True)
-            return
-        send(chat, f"✅ استلمنا إيصال سداد {amount}ج وأرسلناه للإدارة للتحقق. سيظل التقييد قائمًا حتى تأكيد السداد.", main_kb=True)
-        return
     if st=="await_search":
         set_state(uid, None, {})
         do_search(chat, txt)
@@ -507,7 +446,7 @@ def handle_msg(m):
             return
         doc_id = m["photo"][-1]["file_id"]
         tmp["doc"] = doc_id
-        db.execute("INSERT INTO merchants(user_id, store_name, phone, city, doc_photo, status) VALUES(?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET store_name=excluded.store_name, phone=excluded.phone, city=excluded.city, doc_photo=excluded.doc_photo, status='pending', reject_reason=''", (uid, tmp["store_name"], tmp["phone"], tmp["city"], doc_id, "pending"))
+        db.execute("INSERT OR REPLACE INTO merchants(user_id, store_name, phone, city, doc_photo, status) VALUES(?,?,?,?,?,?)", (uid, tmp["store_name"], tmp["phone"], tmp["city"], doc_id, "pending"))
         db.commit()
         set_state(uid, None, {})
         send(chat, f"✅ تم استلام طلبك مع المستند\nمتجر: {tmp['store_name']}\nقيد المراجعة ⏳", main_kb=True)
@@ -524,31 +463,20 @@ def handle_msg(m):
         send(chat, "أرسل السعر أرقام فقط:")
         return
     if st=="await_prod_price":
-        if not txt.isdigit() or int(txt) <= 0:
-            send(chat, "أرسل سعرًا صحيحًا أكبر من صفر، بالأرقام فقط:")
+        if not txt.isdigit():
+            send(chat, "أرقام فقط:")
             return
-        base_price = int(txt)
-        commission_fee = (base_price * COMMISSION_RATE + 50) // 100
-        listing_price = base_price + commission_fee
-        tmp["base_price"] = base_price
-        tmp["commission_fee"] = commission_fee
-        tmp["price"] = listing_price
+        tmp["price"] = int(txt)
         set_state(uid, "await_prod_cat", tmp)
-        send(chat, f"السعر الذي أدخلته: {base_price}ج\nالعمولة {COMMISSION_RATE}٪: {commission_fee}ج\nسيُنشر بعد الموافقة بسعر نهائي: {listing_price}ج\n\nاختر قسم المنتج:", cat_kb("setcat"))
+        send(chat, "اختر قسم المنتج:", cat_kb("setcat"))
         return
     if st=="await_prod_desc":
-        debt_row = db.execute("SELECT COALESCE(commission_due,0) FROM merchants WHERE user_id=?", (uid,)).fetchone()
-        due = debt_row[0] if debt_row else 0
-        if due > 0:
-            set_state(uid, None, {})
-            send(chat, f"لا يمكنك إضافة منتج قبل سداد العمولة المستحقة ({due}ج). افتح لوحة متجرك لاختيار دفع العمولة.", main_kb=True)
-            return
         tmp["desc"] = txt
-        db.execute("INSERT INTO products(merchant_id,name,price,photo_id,description,category,status,base_price,commission_fee) VALUES(?,?,?,?,?,?,?,?,?)", (uid, tmp["name"], tmp["price"], tmp["photo"], tmp["desc"], tmp.get("cat","📦 أخرى"), "pending", tmp.get("base_price", tmp["price"]), tmp.get("commission_fee", (tmp["price"] * COMMISSION_RATE + 50) // 100)))
+        db.execute("INSERT INTO products(merchant_id,name,price,photo_id,description,category,status) VALUES(?,?,?,?,?,?,?)", (uid, tmp["name"], tmp["price"], tmp["photo"], tmp["desc"], tmp.get("cat","📦 أخرى"), "pending"))
         db.commit()
         pid = db.execute("SELECT last_insert_rowid()").fetchone()[0]
         set_state(uid, None, {})
-        comm = tmp.get("commission_fee", (tmp["price"] * COMMISSION_RATE + 50) // 100)
+        comm = int(tmp["price"] * COMMISSION_RATE / 100)
         send(chat, f"✅ تم رفع المنتج في {tmp.get('cat')}\nالسعر: {tmp['price']}ج\nبانتظار الموافقة.", main_kb=True)
         kb = []
         kb.append([{"text":"✅ قبول","callback_data":f"p_ok:{pid}"}])
@@ -558,12 +486,7 @@ def handle_msg(m):
             send(ADMIN_ID, f"🔔 منتج جديد:\n{tmp['name']} - {tmp['price']}ج\nعمولة {comm}ج", kb, photo=tmp["photo"])
         return
     if st=="await_cod_info":
-        seller_debt = db.execute("SELECT COALESCE(commission_due,0) FROM merchants WHERE user_id=?", (tmp["mid"],)).fetchone()
-        if seller_debt and seller_debt[0] > 0:
-            set_state(uid, None, {})
-            send(chat, "تعذر تسجيل الطلب لأن المتجر عليه عمولة مستحقة، ولا يستقبل طلبات جديدة حتى يعتمد الأدمن سدادها.", main_kb=True)
-            return
-        commission = tmp.get("commission", (tmp["price"] * COMMISSION_RATE + 50) // 100)
+        commission = int(tmp["price"] * COMMISSION_RATE / 100)
         db.execute("INSERT INTO orders(buyer_id,product_id,merchant_id,price,commission,buyer_info,status,created_at) VALUES(?,?,?,?,?,?,?,?)", (uid, tmp["pid"], tmp["mid"], tmp["price"], commission, txt, "pending_shipment", time.strftime("%Y-%m-%d")))
         db.commit()
         oid = db.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -685,42 +608,6 @@ def handle_cb(c):
                 send(chat, f"🔔 تاجر:\n{m[1]}\n{m[2]}\n{m[3]}\nID:{m[0]}", kb, photo=m[4])
         answer(c["id"])
         return
-    if data.startswith("commission_paid:") and uid==ADMIN_ID:
-        payment_id = int(data.split(":", 1)[1])
-        payment = db.execute("SELECT merchant_id,amount,status FROM commission_payments WHERE id=?", (payment_id,)).fetchone()
-        if not payment:
-            answer(c["id"], "طلب السداد غير موجود")
-            return
-        if payment[2] != "pending":
-            answer(c["id"], "تمت مراجعة هذا الإيصال مسبقًا")
-            return
-        db.execute("UPDATE commission_payments SET status='approved', reviewed_at=? WHERE id=?", (time.strftime("%Y-%m-%d %H:%M:%S"), payment_id))
-        db.execute("UPDATE merchants SET commission_due=MAX(0,COALESCE(commission_due,0)-?) WHERE user_id=?", (payment[1], payment[0]))
-        db.commit()
-        due_row = db.execute("SELECT COALESCE(commission_due,0) FROM merchants WHERE user_id=?", (payment[0],)).fetchone()
-        remaining = due_row[0] if due_row else 0
-        edit(chat, mid, f"✅ تم تأكيد وصول مبلغ {payment[1]}ج للتاجر {payment[0]}.", [])
-        if remaining:
-            send(payment[0], f"✅ تم اعتماد سداد {payment[1]}ج. ما زال عليك {remaining}ج، وسيبقى التقييد حتى سداد كامل المستحق.", main_kb=True)
-        else:
-            send(payment[0], f"✅ تم تأكيد وصول مبلغ {payment[1]}ج ورفع التقييد عن متجرك. استخدم /start للعودة إلى لوحة المتجر.", main_kb=True)
-        answer(c["id"], "تم اعتماد السداد")
-        return
-    if data.startswith("commission_reject:") and uid==ADMIN_ID:
-        payment_id = int(data.split(":", 1)[1])
-        payment = db.execute("SELECT merchant_id,status FROM commission_payments WHERE id=?", (payment_id,)).fetchone()
-        if not payment:
-            answer(c["id"], "طلب السداد غير موجود")
-            return
-        if payment[1] != "pending":
-            answer(c["id"], "تمت مراجعة هذا الإيصال مسبقًا")
-            return
-        db.execute("UPDATE commission_payments SET status='rejected', reviewed_at=? WHERE id=?", (time.strftime("%Y-%m-%d %H:%M:%S"), payment_id))
-        db.commit()
-        edit(chat, mid, f"❌ لم يتم اعتماد إيصال التاجر {payment[0]}.", [])
-        send(payment[0], "❌ لم يتم اعتماد إيصال السداد. راجع بيانات التحويل، ثم أرسل إيصالًا واضحًا جديدًا من زر دفع العمولة في لوحة متجرك.", main_kb=True)
-        answer(c["id"], "تم رفض الإيصال")
-        return
     if data=="admin_orders" and uid==ADMIN_ID:
         rows = db.execute("SELECT o.id, o.price, o.status, o.created_at, p.name FROM orders o LEFT JOIN products p ON p.id=o.product_id ORDER BY o.id DESC LIMIT 10").fetchall()
         if not rows:
@@ -781,15 +668,9 @@ def handle_cb(c):
         return
     if data.startswith("confirm:"):
         oid = int(data.split(":")[1])
-        order = db.execute("SELECT buyer_id,merchant_id,price,commission,status FROM orders WHERE id=?", (oid,)).fetchone()
+        order = db.execute("SELECT buyer_id,merchant_id,price,commission FROM orders WHERE id=?", (oid,)).fetchone()
         if not order or order[0]!=uid:
             answer(c["id"], "ليس طلبك")
-            return
-        if order[4] == "completed":
-            answer(c["id"], "تم تأكيد هذا الطلب مسبقًا")
-            return
-        if order[4] != "shipped":
-            answer(c["id"], "لا يمكن تأكيد الاستلام قبل شحن الطلب")
             return
         buyer_id = order[0]
         merchant_id = order[1]
@@ -808,13 +689,10 @@ def handle_cb(c):
                 except:
                     pass
         db.execute("UPDATE orders SET status='completed', referral_comm=? WHERE id=?", (referral_amount, oid))
-        db.execute("UPDATE merchants SET commission_due=COALESCE(commission_due,0)+? WHERE user_id=?", (order[3] or 0, merchant_id))
         db.execute("UPDATE users SET sales=sales+1 WHERE user_id=?", (merchant_id,))
         db.commit()
-        debt_row = db.execute("SELECT COALESCE(commission_due,0) FROM merchants WHERE user_id=?", (merchant_id,)).fetchone()
-        total_due = debt_row[0] if debt_row else (order[3] or 0)
-        edit(chat, mid, f"✅ تم تأكيد استلام #{oid}", [])
-        send(merchant_id, f"🎉 المشتري أكد استلام #{oid}\nالسعر {price}ج\nأُضيفت عمولة {order[3] or 0}ج إلى مستحقاتك.\nإجمالي المستحق الآن: {total_due}ج. سيتوقف استقبال طلبات جديدة وإضافة منتجات حتى اعتماد السداد.", main_kb=True)
+        edit(chat, mid, f"✅ تم تأكيد استلام #{oid}")
+        send(merchant_id, f"🎉 المشتري أكد استلام #{oid}\nالسعر {price}ج\nعمولة البوت {order[3]}ج ({COMMISSION_RATE}%)")
         if ADMIN_ID:
             send(ADMIN_ID, f"💰 مكتمل #{oid} السعر {price}ج عمولة {order[3]}ج إحالة {referral_amount}ج")
         answer(c["id"], "تم التأكيد")
@@ -868,33 +746,7 @@ def handle_cb(c):
         edit(chat, mid, f"اخترت {cat} ✅\nأرسل وصف المنتج:")
         answer(c["id"])
         return
-    if data=="pay_commission":
-        merchant_row = db.execute("SELECT COALESCE(commission_due,0) FROM merchants WHERE user_id=?", (uid,)).fetchone()
-        due = merchant_row[0] if merchant_row else 0
-        if due <= 0:
-            edit(chat, mid, "لا توجد عمولة مستحقة حاليًا.", [[{"text":"🔙 لوحة المتجر","callback_data":"home"}]])
-            answer(c["id"])
-            return
-        if not ADMIN_ID:
-            edit(chat, mid, "خدمة اعتماد السداد غير مهيأة بعد. يرجى التواصل مع الإدارة.", [[{"text":"🔙 لوحة المتجر","callback_data":"home"}]])
-            answer(c["id"])
-            return
-        pending = db.execute("SELECT id FROM commission_payments WHERE merchant_id=? AND status='pending' LIMIT 1", (uid,)).fetchone()
-        if pending:
-            edit(chat, mid, "لديك إيصال سداد قيد المراجعة بالفعل. سنبلغك بعد التحقق.", [[{"text":"🔙 لوحة المتجر","callback_data":"home"}]])
-            answer(c["id"])
-            return
-        set_state(uid, "await_commission_receipt", {"payment_amount": due})
-        send(chat, f"💳 المبلغ المستحق: {due}ج\n\nحوّل المبلغ عبر بنكك إلى:\nرقم الحساب: 7696230\nالاسم: بدور عبدالكريم عيسى النعيم\n\nبعد التحويل، أرسل صورة واضحة للإيصال هنا. لن يُرفع التقييد إلا بعد أن تتحقق الإدارة من وصول المبلغ وتؤكد السداد.", main_kb=True)
-        answer(c["id"])
-        return
     if data=="add":
-        debt_row = db.execute("SELECT COALESCE(commission_due,0) FROM merchants WHERE user_id=?", (uid,)).fetchone()
-        due = debt_row[0] if debt_row else 0
-        if due > 0:
-            edit(chat, mid, f"لا يمكنك إضافة منتج جديد قبل سداد العمولة المستحقة ({due}ج).", [[{"text": f"💳 دفع العمولة ({due}ج)", "callback_data": "pay_commission"}], [{"text":"🔙 لوحة المتجر","callback_data":"home"}]])
-            answer(c["id"], "توجد عمولة مستحقة")
-            return
         set_state(uid, "await_prod_photo", {})
         send(chat, "أرسل صورة المنتج:")
         answer(c["id"])
@@ -914,4 +766,109 @@ def handle_cb(c):
             t = "📋 آخر 5:\n\n"
             for o in ords:
                 t += f"#{o[0]} - {o[1]}ج عمولة {o[2]}ج {o[3]}\n"
-            edit(chat, mid, t, [[{"text":"🔙 رجوع","callback_data":"s
+            edit(chat, mid, t, [[{"text":"🔙 رجوع","callback_data":"sales"}]])
+        answer(c["id"])
+        return
+    if data.startswith("buy:"):
+        pid = int(data.split(":")[1])
+        p = db.execute("SELECT * FROM products WHERE id=?", (pid,)).fetchone()
+        if not p:
+            answer(c["id"], "غير موجود")
+            return
+        comm = int(p[3] * COMMISSION_RATE / 100)
+        set_state(uid, "await_cod_info", {"pid":p[0],"mid":p[1],"price":p[3],"pname":p[2],"commission":comm})
+        send(chat, f"📦 {p[2]}\n💰 {p[3]}ج عند الاستلام فقط\nأرسل الاسم - الهاتف - العنوان:")
+        answer(c["id"])
+        return
+    if data.startswith("m_ok:"):
+        mid_t = int(data.split(":")[1])
+        db.execute("UPDATE merchants SET status='approved', reject_reason='' WHERE user_id=?", (mid_t,))
+        db.commit()
+        edit(chat, mid, f"✅ تم قبول التاجر {mid_t}", [])
+        try:
+            send(mid_t, "🎉 تم قبول متجرك بعد مراجعة المستند.\nاستخدم /start لفتح لوحة التاجر وإضافة المنتجات ومتابعة الطلبات.", main_kb=True)
+        except:
+            pass
+        answer(c["id"])
+        return
+    if data.startswith("m_reject_temp:"):
+        target = int(data.split(":")[1])
+        set_state(uid, f"await_reject_reason_temp_m_{target}", {"review_message_id": mid})
+        edit(chat, mid, f"⏳ رفض مؤقت للتاجر {target}\nأرسل السبب:", [])
+        answer(c["id"])
+        return
+    if data.startswith("m_reject_perm:"):
+        target = int(data.split(":")[1])
+        set_state(uid, f"await_reject_reason_perm_m_{target}", {"review_message_id": mid})
+        edit(chat, mid, f"🚫 رفض نهائي للتاجر {target}\nأرسل السبب:", [])
+        answer(c["id"])
+        return
+    if data.startswith("m_no:"):
+        mid_t = int(data.split(":")[1])
+        db.execute("UPDATE merchants SET status='rejected_temp', reject_reason='رفض صامت' WHERE user_id=?", (mid_t,))
+        db.commit()
+        edit(chat, mid, f"🔇 تم إلغاء طلب التاجر {mid_t}.", [])
+        answer(c["id"])
+        return
+    if data.startswith("p_ok:"):
+        pid = int(data.split(":")[1])
+        db.execute("UPDATE products SET status='approved', reject_reason='' WHERE id=?", (pid,))
+        db.commit()
+        p = db.execute("SELECT * FROM products WHERE id=?", (pid,)).fetchone()
+        edit(chat, mid, f"✅ تم نشر {p[2] if p else pid}", [])
+        if p:
+            try:
+                send(p[1], f"✅ تم نشر منتجك {p[2]}", main_kb=True)
+            except:
+                pass
+        answer(c["id"])
+        return
+    if data.startswith("p_reject_temp:"):
+        target = int(data.split(":")[1])
+        set_state(uid, f"await_reject_reason_temp_p_{target}", {"review_message_id": mid})
+        edit(chat, mid, f"⏳ رفض مؤقت للمنتج {target}\nأرسل السبب:", [])
+        answer(c["id"])
+        return
+    if data.startswith("p_reject_perm:"):
+        target = int(data.split(":")[1])
+        set_state(uid, f"await_reject_reason_perm_p_{target}", {"review_message_id": mid})
+        edit(chat, mid, f"🚫 رفض نهائي للمنتج {target}\nأرسل السبب:", [])
+        answer(c["id"])
+        return
+    if data.startswith("p_no:"):
+        pid = int(data.split(":")[1])
+        db.execute("UPDATE products SET status='rejected_temp', reject_reason='كانسل' WHERE id=?", (pid,))
+        db.commit()
+        edit(chat, mid, f"🔇 تم إلغاء طلب المنتج {pid}.", [])
+        answer(c["id"])
+        return
+    if data=="home":
+        merchant_row = db.execute("SELECT status FROM merchants WHERE user_id=?", (uid,)).fetchone()
+        if merchant_row and merchant_row[0] in ["approved", "pending", "banned"]:
+            open_merchant(chat, uid, mid)
+        else:
+            edit(chat, mid, "مرحبا بك في سوق السودان\nهنا ستجد ما تريده إن شاء الله وبأقل الأسعار.", [])
+            send(chat, "مرحبا بك في سوق السودان\nهنا ستجد ما تريده إن شاء الله وبأقل الأسعار.", main_kb=True)
+        answer(c["id"])
+        return
+
+def main():
+    keep_alive()
+    setup()
+    off = 0
+    print(f"Bot V10 FINAL - {COMMISSION_RATE}% + {REFERRAL_RATE}% + Doc + Search + Confirm")
+    while True:
+        try:
+            r = api("getUpdates", {"timeout":30, "offset":off})
+            for u in r.get("result", []):
+                off = u["update_id"]+1
+                if "message" in u:
+                    handle_msg(u["message"])
+                elif "callback_query" in u:
+                    handle_cb(u["callback_query"])
+        except Exception as e:
+            print(e)
+            time.sleep(2)
+
+if __name__=="__main__":
+    main()
