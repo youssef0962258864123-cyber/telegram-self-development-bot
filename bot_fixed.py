@@ -1,17 +1,18 @@
-from flask import Flask
+import os
 import threading
+from flask import Flask
 
-app = Flask('')
-@app.route('/')
+flask_app = Flask('')
+
+@flask_app.route('/')
 def home():
     return "Bot is Alive!"
 
-def run():
-    app.run(host='0.0.0.0', port=10000)
+def run_flask():
+    port = int(os.environ.get("PORT", "10000"))
+    flask_app.run(host="0.0.0.0", port=port)
 
-threading.Thread(target=run).start()
-from keep_alive import keep_alive
-import os
+threading.Thread(target=run_flask, daemon=True).start()
 import json
 import time
 import sqlite3
@@ -932,6 +933,4 @@ def handle_cb(c):
     if data.startswith("buy:"):
         pid = int(data.split(":")[1])
         p = db.execute("SELECT * FROM products WHERE id=?", (pid,)).fetchone()
-        if not p:
-            answer(c["id"], "غير موجود")
-     
+       
