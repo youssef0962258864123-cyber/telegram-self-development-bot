@@ -6,7 +6,6 @@ import time
 import sqlite3
 import re
 import unicodedata
-import traceback
 from difflib import SequenceMatcher
 from urllib.request import Request, urlopen
 from urllib.parse import urlencode
@@ -19,9 +18,7 @@ def home():
     return "Bot is Alive!"
 
 def run():
-    # استخدام منفذ Render الديناميكي
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=10000)
 
 def keep_alive():
     t = threading.Thread(target=run)
@@ -52,56 +49,43 @@ CREATE TABLE IF NOT EXISTS referral_profits(id INTEGER PRIMARY KEY AUTOINCREMENT
 
 try:
     db.execute("ALTER TABLE users ADD COLUMN profit_active INTEGER DEFAULT 0")
-except Exception:
-    pass
+except: pass
 try:
     db.execute("ALTER TABLE users ADD COLUMN referral_earnings INTEGER DEFAULT 0")
-except Exception:
-    pass
+except: pass
 try:
     db.execute("ALTER TABLE users ADD COLUMN referral_balance INTEGER DEFAULT 0")
-except Exception:
-    pass
+except: pass
 try:
     db.execute("ALTER TABLE users ADD COLUMN is_banned INTEGER DEFAULT 0")
-except Exception:
-    pass
+except: pass
 try:
     db.execute("ALTER TABLE users ADD COLUMN unpaid_commission INTEGER DEFAULT 0")
-except Exception:
-    pass
+except: pass
 try:
     db.execute("ALTER TABLE merchants ADD COLUMN doc_photo TEXT")
-except Exception:
-    pass
+except: pass
 try:
     db.execute("ALTER TABLE merchants ADD COLUMN reject_reason TEXT")
-except Exception:
-    pass
+except: pass
 try:
     db.execute("ALTER TABLE products ADD COLUMN reject_reason TEXT")
-except Exception:
-    pass
+except: pass
 try:
     db.execute("ALTER TABLE products ADD COLUMN base_price INTEGER")
-except Exception:
-    pass
+except: pass
 try:
     db.execute("ALTER TABLE orders ADD COLUMN price INTEGER")
-except Exception:
-    pass
+except: pass
 try:
     db.execute("ALTER TABLE orders ADD COLUMN commission INTEGER")
-except Exception:
-    pass
+except: pass
 try:
     db.execute("ALTER TABLE orders ADD COLUMN referral_comm INTEGER")
-except Exception:
-    pass
+except: pass
 try:
     db.execute("ALTER TABLE orders ADD COLUMN created_at TEXT")
-except Exception:
-    pass
+except: pass
 db.commit()
 
 def api(method, data=None):
@@ -112,7 +96,7 @@ def api(method, data=None):
         with urlopen(req, timeout=30) as res:
             return json.loads(res.read())
     except Exception as e:
-        print(f"API Error ({method}):", e)
+        print(e)
         return {}
 
 def send(chat_id, text, kb=None, photo=None, main_kb=False):
@@ -169,7 +153,7 @@ def get_temp(uid):
     if row and row[0]:
         try:
             return json.loads(row[0])
-        except Exception:
+        except:
             return {}
     return {}
 
@@ -204,19 +188,24 @@ def cat_kb(prefix):
     kb = []
     for i in range(0, len(CATEGORIES), 2):
         row = []
-        b1 = {"text": CATEGORIES[i], "callback_data": f"{prefix}:{CATEGORIES[i]}"}
+        b1 = {}
+        b1["text"] = CATEGORIES[i]
+        b1["callback_data"] = f"{prefix}:{CATEGORIES[i]}"
         row.append(b1)
         if i+1 < len(CATEGORIES):
-            b2 = {"text": CATEGORIES[i+1], "callback_data": f"{prefix}:{CATEGORIES[i+1]}"}
+            b2 = {}
+            b2["text"] = CATEGORIES[i+1]
+            b2["callback_data"] = f"{prefix}:{CATEGORIES[i+1]}"
             row.append(b2)
         kb.append(row)
     return kb
 
 def setup():
     try:
-        cmds = [{"command": "start", "description": "🏠 الرئيسية - تحديث وبحث"}]
+        cmds = []
+        cmds.append({"command": "start", "description": "🏠 الرئيسية - تحديث وبحث"})
         api("setMyCommands", {"commands": json.dumps(cmds, ensure_ascii=False)})
-    except Exception:
+    except:
         pass
 
 def normalize_search_text(value):
@@ -258,7 +247,7 @@ def do_search(chat_id, query):
             thresholds = [0.70 if len(word) == 3 else 0.60 if len(word) >= 4 else 1.0 for word in query_words]
             matched = sum(score >= threshold for score, threshold in zip(scores, thresholds))
             coverage = matched / len(query_words)
-            average = sum(scores) / len(scores) if scores else 0
+            average = sum(scores) / len(scores)
             if coverage < 0.5 or average < 0.60:
                 continue
             score = average + (0.12 if any(word in title for word in query_words) else 0.0)
@@ -332,12 +321,12 @@ def handle_msg(m):
     txt = m.get("text", "")
     st = get_state(uid)
     tmp = get_temp(uid)
-    db.execute("INSERT OR IGNORE INTO users(user_id) VALUES(? )", (uid,))
+    db.execute("INSERT OR IGNORE INTO users(user_id) VALUES(?)", (uid,))
     db.commit()
 
     banned_row = db.execute("SELECT is_banned FROM users WHERE user_id=?", (uid,)).fetchone()
-    if banned_row and banned_row[0] == 1 and uid != ADMIN_ID:
-        send(chat, "🚫 محظور، تواصل: " + ADMIN_CONTACT)
+    if banned_row and banned_row[0]==1 and uid!=ADMIN_ID:
+        send(chat, "🚫 محظور، تواصل: "+ADMIN_CONTACT)
         return
 
     if txt in ["🛍️ تسوق", "تسوق", "🛍️ تصفح السوق"]:
@@ -358,7 +347,7 @@ def handle_msg(m):
     if txt in ["🏪 لوحة متجري", "🏪 حالة متجري", "لوحة متجري"]:
         open_merchant(chat, uid)
         return
-    if txt in ["👑 لوحة الأدمن", "/admin"] and uid == ADMIN_ID:
+    if txt in ["👑 لوحة الأدمن", "/admin"] and uid==ADMIN_ID:
         send(chat, "👑 افتح لوحة الإدارة:", [[{"text": "👑 لوحة الأدمن", "callback_data": "admin_panel"}]])
         return
     if txt in ["💰 الربح من البوت", "الربح من البوت"]:
@@ -368,12 +357,12 @@ def handle_msg(m):
         link = f"https://t.me/{BOT_USERNAME}?start={uid}"
         send(chat, f"🎉 تم تفعيل الربح من البوت بنسبة {REFERRAL_RATE}٪\n\nتكسب {REFERRAL_RATE}٪ من قيمة كل عملية شراء مكتملة يقوم بها شخص سجّل من رابطك.\n\n🔗 رابطك الخاص:\n{link}\n\nشارك الرابط مع الآخرين ليتم تسجيلهم من خلاله.", main_kb=True)
         return
-    if txt in ["🔄 تحديث /start", "🔄 تحديث", "تحديث", "/start", "start"]:
+    if txt in ["🔄 تحديث /start","🔄 تحديث","تحديث","/start","start"]:
         set_state(uid, None, {})
         st = None
         tmp = {}
         txt = "/start"
-    if txt in ["📊 حسابي", "حسابي"]:
+    if txt in ["📊 حسابي","حسابي"]:
         row = db.execute("SELECT points,purchases,sales,profit_active,referral_earnings,referral_balance,unpaid_commission FROM users WHERE user_id=?", (uid,)).fetchone()
         points = row[0] if row else 0
         purch = row[1] if row else 0
@@ -385,15 +374,15 @@ def handle_msg(m):
         total_ref = db.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id=?", (uid,)).fetchone()[0]
         total_comm = db.execute("SELECT SUM(commission) FROM orders WHERE merchant_id=? AND status='completed'", (uid,)).fetchone()[0] or 0
         link = f"https://t.me/{BOT_USERNAME}?start={uid}"
-        status_txt = "✅ مفعل" if profit_active == 1 else "❌ غير مفعل"
+        status_txt = "✅ مفعل" if profit_active==1 else "❌ غير مفعل"
         
         msg = f"📊 حسابك:\n\n🛒 اشتريت: {purch}\n📦 بعت: {sales}\n⭐ نقاطك: {points}\n💳 العمولة المستحقة عليك: {debt}ج\n\n💰 نظام الربح {REFERRAL_RATE}%:\nالحالة: {status_txt}\n👥 إحالاتك: {total_ref}\n💵 أرباح الإحالات: {earn}ج\n💳 رصيدك: {bal}ج\n\n🔗 رابط إحالتك:\n{link}\n\nشارك الرابط، تاخد {REFERRAL_RATE}% من مشترياتهم مدى الحياة\n\n💰 عمولة بعتها كتاجر: {total_comm}ج ({COMMISSION_RATE}%)"
         
         kb = []
         if debt > 0:
             kb.append([{"text": "💳 دفع العمولة العليك", "callback_data": "pay_commission"}])
-        if profit_active == 0:
-            kb.append([{"text": "💰 تفعيل الربح 4%", "callback_data": "activate_profit"}])
+        if profit_active==0:
+            kb.append([{"text":"💰 تفعيل الربح 4%","callback_data":"activate_profit"}])
             
         send(chat, msg, kb if kb else None, main_kb=True)
         return
@@ -409,30 +398,9 @@ def handle_msg(m):
         if ADMIN_ID:
             kb = [
                 [{"text": "✅ تأكيد استلام المبلغ", "callback_data": f"pay_ok:{uid}"}],
-                [
-                    {"text": "❌ رفض سريع", "callback_data": f"pay_no:{uid}"},
-                    {"text": "✍️ رفض مع تعليق", "callback_data": f"pay_reason:{uid}"}
-                ]
+                [{"text": "❌ رفض الإشعار", "callback_data": f"pay_no:{uid}"}]
             ]
             send(ADMIN_ID, f"📥 **إشعار دفع عمولة جديد:**\nالمستخدم: `{uid}`\nالمبلغ المطلوب: {debt}ج", kb, photo=photo_id)
-        return
-
-    if st and st.startswith("await_pay_reject_reason_"):
-        reason = txt
-        target_id = int(st.split("_")[4])
-        review_message_id = tmp.get("review_message_id")
-        
-        set_state(target_id, "await_payment_receipt", {})
-        
-        send(chat, f"✅ تم رفض الإشعار للمستخدم `{target_id}` وإرسال السبب له.")
-        try:
-            send(target_id, f"❌ **تم رفض إشعار التحويل.**\n\n📌 **السبب:** {reason}\n\nيرجى التأكد من صحة صورة التحويل وإعادة إرسالها للتحقق.", main_kb=True)
-        except Exception:
-            pass
-
-        if review_message_id:
-            edit(chat, review_message_id, f"❌ تم رفض إشعار المستخدم `{target_id}`.\n📌 السبب: {reason}", [])
-        set_state(uid, None, {})
         return
 
     if st and st.startswith("await_reject_reason_"):
@@ -442,63 +410,62 @@ def handle_msg(m):
         typ = parts[4]
         target_id = int(parts[5])
         review_message_id = tmp.get("review_message_id")
-        if typ == "m":
-            new_status = "rejected_perm" if final_action == "perm" else "rejected_temp"
+        if typ=="m":
+            new_status = "rejected_perm" if final_action=="perm" else "rejected_temp"
             db.execute("UPDATE merchants SET status=?, reject_reason=? WHERE user_id=?", (new_status, reason, target_id))
             db.commit()
-            if final_action == "perm":
+            if final_action=="perm":
                 send(chat, f"✅ رفض نهائي {target_id}")
                 try:
                     send(target_id, f"❌ رفض نهائي لمتجرك:\n{reason}\nتواصل: {ADMIN_CONTACT}", main_kb=True)
-                except Exception:
+                except:
                     pass
             else:
                 send(chat, f"✅ رفض مؤقت {target_id}")
                 try:
                     send(target_id, f"⏳ رفض مؤقت:\n{reason}\n/start", main_kb=True)
-                except Exception:
+                except:
                     pass
         else:
-            new_status = "rejected_perm" if final_action == "perm" else "rejected_temp"
+            new_status = "rejected_perm" if final_action=="perm" else "rejected_temp"
             db.execute("UPDATE products SET status=?, reject_reason=? WHERE id=?", (new_status, reason, target_id))
             db.commit()
             prod = db.execute("SELECT merchant_id,name FROM products WHERE id=?", (target_id,)).fetchone()
             send(chat, f"✅ رفض {final_action} للمنتج {target_id}")
             if prod:
                 try:
-                    if final_action == "perm":
+                    if final_action=="perm":
                         send(prod[0], f"❌ رفض نهائي '{prod[1]}':\n{reason}", main_kb=True)
                     else:
                         send(prod[0], f"⏳ رفض مؤقت '{prod[1]}':\n{reason}", main_kb=True)
-                except Exception:
+                except:
                     pass
         if review_message_id:
-            outcome = "رفض نهائي" if final_action == "perm" else "رفض مؤقت"
-            entity = "التاجر" if typ == "m" else "المنتج"
+            outcome = "رفض نهائي" if final_action=="perm" else "رفض مؤقت"
+            entity = "التاجر" if typ=="m" else "المنتج"
             edit(chat, review_message_id, f"✅ {outcome} طلب {entity} {target_id}.\nالسبب: {reason}", [])
         set_state(uid, None, {})
         return
-
-    if st == "await_search":
+    if st=="await_search":
         set_state(uid, None, {})
         do_search(chat, txt)
         return
-    if st == "await_store_name":
+    if st=="await_store_name":
         tmp["store_name"] = txt
         set_state(uid, "await_phone", tmp)
         send(chat, "تمام ✅\nأرسل رقم واتساب:")
         return
-    if st == "await_phone":
+    if st=="await_phone":
         tmp["phone"] = txt
         set_state(uid, "await_city", tmp)
         send(chat, "أرسل مدينتك:")
         return
-    if st == "await_city":
+    if st=="await_city":
         tmp["city"] = txt
         set_state(uid, "await_doc", tmp)
         send(chat, f"✅ استلمنا مدينتك: {txt}\n\nأرسل صورة واضحة لمستند الهوية (بطاقة شخصية أو جواز سفر أو رخصة). أرسل صورة فقط.")
         return
-    if st == "await_doc":
+    if st=="await_doc":
         if "photo" not in m:
             send(chat, "❌ أرسل صورة المستند، ليس نص:")
             return
@@ -508,20 +475,19 @@ def handle_msg(m):
         db.commit()
         set_state(uid, None, {})
         send(chat, f"✅ تم استلام طلبك مع المستند\nمتجر: {tmp['store_name']}\nقيد المراجعة ⏳", main_kb=True)
-        kb = [
-            [{"text": "✅ قبول", "callback_data": f"m_ok:{uid}"}],
-            [{"text": "⏳ رفض مؤقت", "callback_data": f"m_reject_temp:{uid}"}, {"text": "🚫 رفض نهائي", "callback_data": f"m_reject_perm:{uid}"}],
-            [{"text": "🔇 كانسل", "callback_data": f"m_no:{uid}"}]
-        ]
+        kb = []
+        kb.append([{"text":"✅ قبول","callback_data":f"m_ok:{uid}"}])
+        kb.append([{"text":"⏳ رفض مؤقت","callback_data":f"m_reject_temp:{uid}"},{"text":"🚫 رفض نهائي","callback_data":f"m_reject_perm:{uid}"}])
+        kb.append([{"text":"🔇 كانسل","callback_data":f"m_no:{uid}"}])
         if ADMIN_ID:
             send(ADMIN_ID, f"🔔 طلب إنشاء متجر جديد + مستند هوية:\n{tmp['store_name']}\n{tmp['phone']}\n{tmp['city']}\nID:{uid}", kb, photo=doc_id)
         return
-    if st == "await_prod_name":
+    if st=="await_prod_name":
         tmp["name"] = txt
         set_state(uid, "await_prod_price", tmp)
         send(chat, "أرسل السعر الأساسي أرقام فقط من غير عمولة المتجر:")
         return
-    if st == "await_prod_price":
+    if st=="await_prod_price":
         if not txt.isdigit() or int(txt) <= 0:
             send(chat, "أرسل السعر الأساسي أرقام فقط، ويجب أن يكون أكبر من صفر:")
             return
@@ -539,26 +505,25 @@ def handle_msg(m):
         send(chat, f"💰 مبلغ الطلب بدون عمولة: {base_price:,.0f}ج\nقيمة العمولة ({COMMISSION_RATE}%): {commission:,.0f}ج\n\n📌 **سيتم نشره بي سعر:** {final_price:,.0f}ج\n\nهل توافق على السعر؟", kb)
         return
 
-    if st == "await_prod_price_confirm":
+    if st=="await_prod_price_confirm":
         send(chat, "استخدم أزرار الموافقة أو الرفض الظاهرة أسفل رسالة السعر.")
         return
-    if st == "await_prod_desc":
+    if st=="await_prod_desc":
         tmp["desc"] = txt
-        db.execute("INSERT INTO products(merchant_id,name,price,base_price,photo_id,description,category,status) VALUES(?,?,?,?,?,?,?,?)", (uid, tmp["name"], tmp["price"], tmp.get("base_price", tmp["price"]), tmp["photo"], tmp["desc"], tmp.get("cat", "📦 أخرى"), "pending"))
+        db.execute("INSERT INTO products(merchant_id,name,price,base_price,photo_id,description,category,status) VALUES(?,?,?,?,?,?,?,?)", (uid, tmp["name"], tmp["price"], tmp.get("base_price", tmp["price"]), tmp["photo"], tmp["desc"], tmp.get("cat","📦 أخرى"), "pending"))
         db.commit()
         pid = db.execute("SELECT last_insert_rowid()").fetchone()[0]
         set_state(uid, None, {})
         comm = tmp.get("commission", int(tmp["price"] * COMMISSION_RATE / 109))
         send(chat, f"✅ تم رفع المنتج في {tmp.get('cat')}\nالسعر الأساسي: {tmp.get('base_price', tmp['price'])}ج\nعمولة المتجر: {comm}ج\nسعر البيع: {tmp['price']}ج\nبانتظار الموافقة.", main_kb=True)
-        kb = [
-            [{"text": "✅ قبول", "callback_data": f"p_ok:{pid}"}],
-            [{"text": "⏳ رفض مؤقت", "callback_data": f"p_reject_temp:{pid}"}, {"text": "🚫 رفض نهائي", "callback_data": f"p_reject_perm:{pid}"}],
-            [{"text": "🔇 كانسل", "callback_data": f"p_no:{pid}"}]
-        ]
+        kb = []
+        kb.append([{"text":"✅ قبول","callback_data":f"p_ok:{pid}"}])
+        kb.append([{"text":"⏳ رفض مؤقت","callback_data":f"p_reject_temp:{pid}"},{"text":"🚫 رفض نهائي","callback_data":f"p_reject_perm:{pid}"}])
+        kb.append([{"text":"🔇 كانسل","callback_data":f"p_no:{pid}"}])
         if ADMIN_ID:
             send(ADMIN_ID, f"🔔 منتج جديد:\n{tmp['name']} - {tmp['price']}ج\nعمولة {comm}ج", kb, photo=tmp["photo"])
         return
-    if st == "await_cod_info":
+    if st=="await_cod_info":
         commission = tmp.get("commission", int(round(tmp["price"] * COMMISSION_RATE / (100 + COMMISSION_RATE))))
         db.execute("INSERT INTO orders(buyer_id,product_id,merchant_id,price,commission,buyer_info,status,created_at) VALUES(?,?,?,?,?,?,?,?)", (uid, tmp["pid"], tmp["mid"], tmp["price"], commission, txt, "pending_shipment", time.strftime("%Y-%m-%d")))
         db.commit()
@@ -567,19 +532,20 @@ def handle_msg(m):
         db.commit()
         set_state(uid, None, {})
         send(chat, f"✅ تم تسجيل طلبك #{oid} في قاعدة البيانات\nالمنتج: {tmp['pname']}\nالسعر: {tmp['price']}ج\nالدفع عند الاستلام فقط\nالتاجر سيتواصل معك.", main_kb=True)
-        kb_ship = [[{"text": f"📦 تم الشحن - طلب #{oid}", "callback_data": f"ship:{oid}"}]]
+        kb_ship = []
+        kb_ship.append([{"text":f"📦 تم الشحن - طلب #{oid}","callback_data":f"ship:{oid}"}])
         send(tmp["mid"], f"🔔 طلب جديد #{oid}\nالمنتج: {tmp['pname']}\nالسعر: {tmp['price']}ج\nالزبون:\n{txt}\n\nعند شحن الطلب دوس الزر:", kb_ship)
         return
-    if "photo" in m and st == "await_prod_photo":
+    if "photo" in m and st=="await_prod_photo":
         tmp["photo"] = m["photo"][-1]["file_id"]
         set_state(uid, "await_prod_name", tmp)
         send(chat, "الصورة وصلت ✅\nأرسل اسم المنتج:")
         return
     if txt.startswith("/start"):
         parts = txt.split()
-        if len(parts) > 1 and parts[1].isdigit():
+        if len(parts)>1 and parts[1].isdigit():
             ref_id = int(parts[1])
-            if ref_id != uid:
+            if ref_id!=uid:
                 already = db.execute("SELECT * FROM referrals WHERE referred_id=?", (uid,)).fetchone()
                 user_ref = db.execute("SELECT referred_by FROM users WHERE user_id=?", (uid,)).fetchone()
                 if not already and (not user_ref or not user_ref[0]):
@@ -589,7 +555,7 @@ def handle_msg(m):
                     db.commit()
                     try:
                         send(ref_id, f"🎉 إحالة جديدة!\nشخص سجل عبر رابطك\n+10 نقاط\nإذا فعلت الربح {REFERRAL_RATE}% ستكسب من مشترياته مدى الحياة!")
-                    except Exception:
+                    except:
                         pass
         merchant_row = db.execute("SELECT status FROM merchants WHERE user_id=?", (uid,)).fetchone()
         if merchant_row and merchant_row[0] == "approved":
@@ -597,7 +563,7 @@ def handle_msg(m):
             return
         send(chat, "مرحبا بك في سوق السودان \nهنا ستجد ما تريده إن شاء الله وبأقل الأسعار.", main_kb=True)
         return
-    if len(txt) >= 2 and st is None and txt not in ["📊 حسابي", "💰 تفعيل الربح", "☎️ خدمة العملاء", "🔄 تحديث /start", "🔍 بحث", "🔍 بحث عن منتج", "بحث عن منتج", "🛍️ تسوق", "تسوق", "🏪 إنشاء حساب تاجر", "إنشاء حساب تاجر", "💰 الربح من البوت", "أنا تاجر الآن", "حسابي"]:
+    if len(txt)>=2 and st is None and txt not in ["📊 حسابي","💰 تفعيل الربح","☎️ خدمة العملاء","🔄 تحديث /start","🔍 بحث","🔍 بحث عن منتج","بحث عن منتج","🛍️ تسوق","تسوق","🏪 إنشاء حساب تاجر","إنشاء حساب تاجر","💰 الربح من البوت","أنا تاجر الآن","حسابي"]:
         do_search(chat, txt)
         return
 
@@ -623,48 +589,37 @@ def handle_cb(c):
 
     if data.startswith("pay_ok:") and uid == ADMIN_ID:
         target_uid = int(data.split(":")[1])
-        set_state(target_uid, None, {})
         db.execute("UPDATE users SET unpaid_commission=0 WHERE user_id=?", (target_uid,))
         db.commit()
         edit(chat, mid, f"✅ تم تأكيد استلام العمولة وتصفير مديونية المستخدم `{target_uid}` بنجاح.", [])
         try:
             send(target_uid, "✅ **تم تأكيد استلام العمولة بنجاح!**\nتم رفع التقييد عن حسابك ويمكنك الآن استخدام كافة خدمات البوت بحرية.", main_kb=True)
-        except Exception:
-            pass
+        except: pass
         answer(c["id"], "تم التأكيد")
         return
 
     if data.startswith("pay_no:") and uid == ADMIN_ID:
         target_uid = int(data.split(":")[1])
-        set_state(target_uid, "await_payment_receipt", {})
         edit(chat, mid, f"❌ تم رفض إشعار التحويل للمستخدم `{target_uid}`.", [])
         try:
             send(target_uid, "❌ **تم رفض إشعار التحويل.**\nيرجى التأكد من صحة صورة التحويل وإعادة إرسالها للتحقق.", main_kb=True)
-        except Exception:
-            pass
+        except: pass
         answer(c["id"], "تم الرفض")
         return
 
-    if data.startswith("pay_reason:") and uid == ADMIN_ID:
-        target_uid = int(data.split(":")[1])
-        set_state(uid, f"await_pay_reject_reason_{target_uid}", {"review_message_id": mid})
-        edit(chat, mid, f"✍️ أرسل سبب رفض الإشعار للمستخدم `{target_uid}`:", [])
-        answer(c["id"])
-        return
-
-    if data == "search":
+    if data=="search":
         set_state(uid, "await_search", {})
         edit(chat, mid, "🔍 أرسل اسم المنتج أو جزءًا من اسمه. لا يلزم أن تكتب الاسم بشكل مطابق تمامًا.")
         answer(c["id"])
         return
-    if data == "activate_profit":
+    if data=="activate_profit":
         db.execute("UPDATE users SET profit_active=1 WHERE user_id=?", (uid,))
         db.commit()
         link = f"https://t.me/{BOT_USERNAME}?start={uid}"
         edit(chat, mid, f"🎉 تم تفعيل الربح من البوت بنسبة {REFERRAL_RATE}٪\n\nتكسب {REFERRAL_RATE}٪ من قيمة كل عملية شراء مكتملة يقوم بها شخص سجّل من رابطك.\n\n🔗 رابطك الخاص:\n{link}\n\nشارك الرابط مع الآخرين ليتم تسجيلهم من خلاله.")
         answer(c["id"], "تم التفعيل!")
         return
-    if data == "my_referral_earnings":
+    if data=="my_referral_earnings":
         row = db.execute("SELECT referral_earnings,referral_balance FROM users WHERE user_id=?", (uid,)).fetchone()
         earn = row[0] if row else 0
         bal = row[1] if row else 0
@@ -678,60 +633,58 @@ def handle_cb(c):
                 txt += f"من {p[0]} - {p[1]}ج - {p[2]}\n"
         link = f"https://t.me/{BOT_USERNAME}?start={uid}"
         txt += f"\n🔗 رابطك:\n{link}"
-        edit(chat, mid, txt, [[{"text": "🔙 رجوع", "callback_data": "home"}]])
+        edit(chat, mid, txt, [[{"text":"🔙 رجوع","callback_data":"home"}]])
         answer(c["id"])
         return
-    if data == "admin_panel" and uid == ADMIN_ID:
+    if data=="admin_panel" and uid==ADMIN_ID:
         total_users = db.execute("SELECT COUNT(*) FROM users").fetchone()[0]
         total_merch = db.execute("SELECT COUNT(*) FROM merchants WHERE status='approved'").fetchone()[0]
         pending_m = db.execute("SELECT COUNT(*) FROM merchants WHERE status='pending'").fetchone()[0]
         total_comm = db.execute("SELECT SUM(commission) FROM orders WHERE status='completed'").fetchone()[0] or 0
         total_ref_profits = db.execute("SELECT SUM(amount) FROM referral_profits").fetchone()[0] or 0
         total_orders = db.execute("SELECT COUNT(*) FROM orders").fetchone()[0]
-        kb = [
-            [{"text": f"👥 المستخدمين ({total_users})", "callback_data": "admin_users"}],
-            [{"text": f"🏪 التجار ({total_merch})", "callback_data": "admin_merchants"}],
-            [{"text": f"⏳ معلق ({pending_m})", "callback_data": "admin_pending"}],
-            [{"text": f"💰 أرباح العمولة {total_comm}ج", "callback_data": "admin_profits"}],
-            [{"text": f"💸 أرباح الإحالات {total_ref_profits}ج", "callback_data": "admin_ref_profits"}],
-            [{"text": f"🧾 طلبات العملاء ({total_orders})", "callback_data": "admin_orders"}],
-            [{"text": "🏠 الرئيسية", "callback_data": "home"}]
-        ]
+        kb = []
+        kb.append([{"text":f"👥 المستخدمين ({total_users})","callback_data":"admin_users"}])
+        kb.append([{"text":f"🏪 التجار ({total_merch})","callback_data":"admin_merchants"}])
+        kb.append([{"text":f"⏳ معلق ({pending_m})","callback_data":"admin_pending"}])
+        kb.append([{"text":f"💰 أرباح العمولة {total_comm}ج","callback_data":"admin_profits"}])
+        kb.append([{"text":f"💸 أرباح الإحالات {total_ref_profits}ج","callback_data":"admin_ref_profits"}])
+        kb.append([{"text":f"🧾 طلبات العملاء ({total_orders})","callback_data":"admin_orders"}])
+        kb.append([{"text":"🏠 الرئيسية","callback_data":"home"}])
         edit(chat, mid, f"👑 لوحة الأدمن\n\n👥 {total_users}\n🏪 {total_merch}\n⏳ {pending_m}\n💰 عمولة {COMMISSION_RATE}%: {total_comm}ج\n💸 إحالات {REFERRAL_RATE}%: {total_ref_profits}ج\nصافي لك: {total_comm - total_ref_profits}ج", kb)
         answer(c["id"])
         return
-    if data == "admin_profits" and uid == ADMIN_ID:
+    if data=="admin_profits" and uid==ADMIN_ID:
         total = db.execute("SELECT SUM(commission) FROM orders WHERE status='completed'").fetchone()[0] or 0
-        edit(chat, mid, f"💰 أرباح العمولة {COMMISSION_RATE}%: {total}ج", [[{"text": "🔙 رجوع", "callback_data": "admin_panel"}]])
+        edit(chat, mid, f"💰 أرباح العمولة {COMMISSION_RATE}%: {total}ج", [[{"text":"🔙 رجوع","callback_data":"admin_panel"}]])
         answer(c["id"])
         return
-    if data == "admin_ref_profits" and uid == ADMIN_ID:
+    if data=="admin_ref_profits" and uid==ADMIN_ID:
         total = db.execute("SELECT SUM(amount) FROM referral_profits").fetchone()[0] or 0
         rows = db.execute("SELECT referrer_id,buyer_id,amount,created_at FROM referral_profits ORDER BY id DESC LIMIT 10").fetchall()
         txt = f"💸 أرباح الإحالات {REFERRAL_RATE}%: {total}ج\n\nآخر 10:\n"
         for r in rows:
             txt += f"مرجع {r[0]} من مشتري {r[1]} = {r[2]}ج {r[3]}\n"
-        edit(chat, mid, txt, [[{"text": "🔙 رجوع", "callback_data": "admin_panel"}]])
+        edit(chat, mid, txt, [[{"text":"🔙 رجوع","callback_data":"admin_panel"}]])
         answer(c["id"])
         return
-    if data == "admin_pending" and uid == ADMIN_ID:
+    if data=="admin_pending" and uid==ADMIN_ID:
         pend = db.execute("SELECT user_id,store_name,phone,city,doc_photo FROM merchants WHERE status='pending' LIMIT 5").fetchall()
         if not pend:
-            edit(chat, mid, "لا يوجد طلبات معلقة", [[{"text": "🔙 رجوع", "callback_data": "admin_panel"}]])
+            edit(chat, mid, "لا يوجد طلبات معلقة", [[{"text":"🔙 رجوع","callback_data":"admin_panel"}]])
         else:
             edit(chat, mid, f"⏳ {len(pend)} طلبات معلقة + مستندات")
             for m in pend:
-                kb = [
-                    [{"text": "✅ قبول", "callback_data": f"m_ok:{m[0]}"}],
-                    [{"text": "⏳ رفض مؤقت", "callback_data": f"m_reject_temp:{m[0]}"}, {"text": "🚫 رفض نهائي", "callback_data": f"m_reject_perm:{m[0]}"}]
-                ]
+                kb = []
+                kb.append([{"text":"✅ قبول","callback_data":f"m_ok:{m[0]}"}])
+                kb.append([{"text":"⏳ رفض مؤقت","callback_data":f"m_reject_temp:{m[0]}"},{"text":"🚫 رفض نهائي","callback_data":f"m_reject_perm:{m[0]}"}])
                 send(chat, f"🔔 تاجر:\n{m[1]}\n{m[2]}\n{m[3]}\nID:{m[0]}", kb, photo=m[4])
         answer(c["id"])
         return
-    if data == "admin_orders" and uid == ADMIN_ID:
+    if data=="admin_orders" and uid==ADMIN_ID:
         rows = db.execute("SELECT o.id, o.price, o.status, o.created_at, p.name FROM orders o LEFT JOIN products p ON p.id=o.product_id ORDER BY o.id DESC LIMIT 10").fetchall()
         if not rows:
-            edit(chat, mid, "🧾 لا توجد طلبات محفوظة حتى الآن.", [[{"text": "🔙 لوحة الأدمن", "callback_data": "admin_panel"}]])
+            edit(chat, mid, "🧾 لا توجد طلبات محفوظة حتى الآن.", [[{"text":"🔙 لوحة الأدمن","callback_data":"admin_panel"}]])
         else:
             lines = ["🧾 آخر طلبات العملاء المحفوظة (حتى 10):"]
             keyboard = []
@@ -739,34 +692,34 @@ def handle_cb(c):
                 product_name = row[4] or "منتج محذوف/غير متاح"
                 lines.append(f"#{row[0]} — {product_name[:30]} — {row[1]}ج — {row[2]} — {row[3] or ''}")
                 keyboard.append([{"text": f"تفاصيل الطلب #{row[0]}", "callback_data": f"admin_order:{row[0]}"}])
-            keyboard.append([{"text": "🔙 لوحة الأدمن", "callback_data": "admin_panel"}])
+            keyboard.append([{"text":"🔙 لوحة الأدمن","callback_data":"admin_panel"}])
             edit(chat, mid, "\n".join(lines), keyboard)
         answer(c["id"])
         return
-    if data.startswith("admin_order:") and uid == ADMIN_ID:
+    if data.startswith("admin_order:") and uid==ADMIN_ID:
         oid = int(data.split(":", 1)[1])
         row = db.execute("SELECT o.id,o.buyer_id,o.merchant_id,o.price,o.commission,o.referral_comm,o.buyer_info,o.status,o.created_at,p.name FROM orders o LEFT JOIN products p ON p.id=o.product_id WHERE o.id=?", (oid,)).fetchone()
         if not row:
-            edit(chat, mid, "لم أجد هذا الطلب في قاعدة البيانات.", [[{"text": "🔙 طلبات العملاء", "callback_data": "admin_orders"}]])
+            edit(chat, mid, "لم أجد هذا الطلب في قاعدة البيانات.", [[{"text":"🔙 طلبات العملاء","callback_data":"admin_orders"}]])
         else:
             buyer_info = (row[6] or "غير مسجل")[:1400]
             product_name = row[9] or "منتج محذوف/غير متاح"
             message = (f"🧾 تفاصيل الطلب #{row[0]}\n\nالمنتج: {product_name}\nرقم العميل: {row[1]}\nرقم التاجر: {row[2]}\nالسعر: {row[3]}ج\nالعمولة: {row[4]}ج\nإحالة: {row[5] or 0}ج\nالحالة: {row[7]}\nالتاريخ: {row[8] or 'غير محدد'}\n\nبيانات العميل المسجلة:\n{buyer_info}")
-            edit(chat, mid, message, [[{"text": "🔙 طلبات العملاء", "callback_data": "admin_orders"}]])
+            edit(chat, mid, message, [[{"text":"🔙 طلبات العملاء","callback_data":"admin_orders"}]])
         answer(c["id"])
         return
-    if data == "my_pending":
+    if data=="my_pending":
         orders = db.execute("SELECT id,price,commission,buyer_info,status FROM orders WHERE merchant_id=? AND status IN ('pending_shipment','shipped') ORDER BY id DESC LIMIT 10", (uid,)).fetchall()
         if not orders:
-            edit(chat, mid, "لا يوجد طلبات قيد الشحن", [[{"text": "🔙 رجوع", "callback_data": "home"}]])
+            edit(chat, mid, "لا يوجد طلبات قيد الشحن", [[{"text":"🔙 رجوع","callback_data":"home"}]])
         else:
             txt = "📦 طلبات قيد الشحن:\n\n"
             kb = []
             for o in orders:
                 txt += f"#{o[0]} - {o[1]}ج - {o[4]}\n{o[3][:30]}\n\n"
-                if o[4] == "pending_shipment":
-                    kb.append([{"text": f"📦 شحن #{o[0]}", "callback_data": f"ship:{o[0]}"}])
-            kb.append([{"text": "🔙 رجوع", "callback_data": "home"}])
+                if o[4]=="pending_shipment":
+                    kb.append([{"text":f"📦 شحن #{o[0]}","callback_data":f"ship:{o[0]}"}])
+            kb.append([{"text":"🔙 رجوع","callback_data":"home"}])
             edit(chat, mid, txt, kb)
         answer(c["id"])
         return
@@ -776,24 +729,23 @@ def handle_cb(c):
             return
         oid = int(data.split(":")[1])
         order = db.execute("SELECT buyer_id,merchant_id,price FROM orders WHERE id=?", (oid,)).fetchone()
-        if not order or order[1] != uid:
+        if not order or order[1]!=uid:
             answer(c["id"], "ليس طلبك")
             return
         db.execute("UPDATE orders SET status='shipped' WHERE id=?", (oid,))
         db.commit()
         edit(chat, mid, f"✅ تم شحن #{oid}")
         buyer_id = order[0]
-        kb_confirm = [
-            [{"text": f"✅ تأكيد استلام #{oid}", "callback_data": f"confirm:{oid}"}],
-            [{"text": f"❌ مشكلة #{oid}", "callback_data": f"dispute:{oid}"}]
-        ]
+        kb_confirm = []
+        kb_confirm.append([{"text":f"✅ تأكيد استلام #{oid}","callback_data":f"confirm:{oid}"}])
+        kb_confirm.append([{"text":f"❌ مشكلة #{oid}","callback_data":f"dispute:{oid}"}])
         send(buyer_id, f"📦 طلبك #{oid} تم شحنه! السعر {order[2]}ج عند الاستلام\nهل استلمت؟", kb_confirm)
         answer(c["id"], "تم الشحن")
         return
     if data.startswith("confirm:"):
         oid = int(data.split(":")[1])
         order = db.execute("SELECT buyer_id,merchant_id,price,commission FROM orders WHERE id=?", (oid,)).fetchone()
-        if not order or order[0] != uid:
+        if not order or order[0]!=uid:
             answer(c["id"], "ليس طلبك")
             return
         buyer_id = order[0]
@@ -806,13 +758,13 @@ def handle_cb(c):
         if ref_row and ref_row[0]:
             referrer_id = ref_row[0]
             active = db.execute("SELECT profit_active FROM users WHERE user_id=?", (referrer_id,)).fetchone()
-            if active and active[0] == 1:
+            if active and active[0]==1:
                 referral_amount = int(price * REFERRAL_RATE / 100)
                 db.execute("INSERT INTO referral_profits(referrer_id,buyer_id,order_id,amount,created_at) VALUES(?,?,?,?,?)", (referrer_id, buyer_id, oid, referral_amount, time.strftime("%Y-%m-%d")))
                 db.execute("UPDATE users SET referral_earnings=referral_earnings+?, referral_balance=referral_balance+? WHERE user_id=?", (referral_amount, referral_amount, referrer_id))
                 try:
                     send(referrer_id, f"💰 ربح إحالة جديد!\nالمشتري {buyer_id} اشترى ب {price}ج\nربحك {referral_amount}ج ({REFERRAL_RATE}%) مدى الحياة!\nطلب #{oid}")
-                except Exception:
+                except:
                     pass
         db.execute("UPDATE orders SET status='completed', referral_comm=? WHERE id=?", (referral_amount, oid))
         db.execute("UPDATE users SET sales=sales+1, unpaid_commission=unpaid_commission+? WHERE user_id=?", (comm_amount, merchant_id))
@@ -832,38 +784,39 @@ def handle_cb(c):
             send(ADMIN_ID, f"⚠️ شكوى طلب #{oid}")
         answer(c["id"])
         return
-    if data == "buyer":
+    if data=="buyer":
         kb = cat_kb("browse")
-        kb.append([{"text": "🛍️ كل المنتجات", "callback_data": "browse:all"}])
-        kb.append([{"text": "🔍 بحث عن منتج", "callback_data": "search"}])
-        kb.append([{"text": "🏠 الرئيسية", "callback_data": "home"}])
+        kb.append([{"text":"🛍️ كل المنتجات","callback_data":"browse:all"}])
+        kb.append([{"text":"🔍 بحث عن منتج","callback_data":"search"}])
+        kb.append([{"text":"🏠 الرئيسية","callback_data":"home"}])
         edit(chat, mid, "🛍️ خدمات التسوق\nاختر قسمًا، تصفح كل المنتجات، أو ابحث باسم المنتج:", kb)
         answer(c["id"])
         return
     if data.startswith("browse:"):
         cat = data.split(":", 1)[1]
-        if cat == "all":
+        if cat=="all":
             prods = db.execute("SELECT * FROM products WHERE status='approved' ORDER BY id DESC LIMIT 10").fetchall()
             title = "كل المنتجات"
         else:
             prods = db.execute("SELECT * FROM products WHERE status='approved' AND category=? ORDER BY id DESC LIMIT 10", (cat,)).fetchall()
             title = f"قسم {cat}"
         if not prods:
-            edit(chat, mid, f"{title}\nما في منتجات", [[{"text": "🔙 رجوع", "callback_data": "buyer"}]])
+            edit(chat, mid, f"{title}\nما في منتجات", [[{"text":"🔙 رجوع","callback_data":"buyer"}]])
         else:
             edit(chat, mid, f"{title} - {len(prods)} منتج")
             for p in prods:
                 store = db.execute("SELECT store_name FROM merchants WHERE user_id=?", (p[1],)).fetchone()
                 sname = store[0] if store else "متجر"
-                kb = [[{"text": f"🛒 شراء {p[3]}ج عند الاستلام", "callback_data": f"buy:{p[0]}"}]]
+                kb = []
+                kb.append([{"text":f"🛒 شراء {p[3]}ج عند الاستلام","callback_data":f"buy:{p[0]}"}])
                 send(chat, f"📦 {p[2]}\n💰 {p[3]}ج عند الاستلام\n📝 {p[5]}\n🏷️ {p[6]}\n🏪 {sname}", kb, photo=p[4])
         answer(c["id"])
         return
-    if data == "merchant":
+    if data=="merchant":
         open_merchant(chat, uid, mid)
         answer(c["id"])
         return
-    if data == "prod_price_confirm":
+    if data=="prod_price_confirm":
         if get_state(uid) != "await_prod_price_confirm":
             answer(c["id"], "انتهت جلسة التسعير أو تم التعامل معها مسبقاً")
             return
@@ -873,7 +826,7 @@ def handle_cb(c):
         answer(c["id"], "تم اعتماد السعر")
         return
 
-    if data == "prod_price_cancel":
+    if data=="prod_price_cancel":
         if get_state(uid) != "await_prod_price_confirm":
             answer(c["id"], "انتهت جلسة التسعير أو تم التعامل معها مسبقاً")
             return
@@ -890,7 +843,7 @@ def handle_cb(c):
         edit(chat, mid, f"اخترت {cat} ✅\nأرسل وصف المنتج:")
         answer(c["id"])
         return
-    if data == "add":
+    if data=="add":
         if check_debt_and_block(chat, uid):
             answer(c["id"], "عليك عمولة مستحقة")
             return
@@ -898,30 +851,30 @@ def handle_cb(c):
         send(chat, "أرسل صورة المنتج:")
         answer(c["id"])
         return
-    if data == "sales":
+    if data=="sales":
         total = db.execute("SELECT COUNT(*) FROM orders WHERE merchant_id=? AND status='completed'", (uid,)).fetchone()[0]
         total_comm = db.execute("SELECT SUM(commission) FROM orders WHERE merchant_id=? AND status='completed'", (uid,)).fetchone()[0] or 0
         cnt = db.execute("SELECT COUNT(*) FROM products WHERE merchant_id=? AND status='approved'", (uid,)).fetchone()[0]
         debt = get_user_debt(uid)
         
         msg = f"📊 مبيعاتك:\n📦 المنتجات: {cnt}\n✅ الطلبات المكتملة: {total}\n💰 إجمالي رسوم السوق: {total_comm}ج\n💳 العمولة غير المدفوعة العليك: {debt}ج"
-        kb = [[{"text": "📋 آخر الطلبات", "callback_data": "orders"}]]
+        kb = [[{"text":"📋 آخر الطلبات","callback_data":"orders"}]]
         if debt > 0:
             kb.append([{"text": "💳 دفع العمولة العليك", "callback_data": "pay_commission"}])
-        kb.append([{"text": "🏠 الرئيسية", "callback_data": "home"}])
+        kb.append([{"text":"🏠 الرئيسية","callback_data":"home"}])
         
         edit(chat, mid, msg, kb)
         answer(c["id"])
         return
-    if data == "orders":
+    if data=="orders":
         ords = db.execute("SELECT id,price,commission,status FROM orders WHERE merchant_id=? ORDER BY id DESC LIMIT 5", (uid,)).fetchall()
         if not ords:
-            edit(chat, mid, "ما جاك طلبات", [[{"text": "🔙 رجوع", "callback_data": "sales"}]])
+            edit(chat, mid, "ما جاك طلبات", [[{"text":"🔙 رجوع","callback_data":"sales"}]])
         else:
             t = "📋 آخر 5:\n\n"
             for o in ords:
                 t += f"#{o[0]} - {o[1]}ج عمولة {o[2]}ج {o[3]}\n"
-            edit(chat, mid, t, [[{"text": "🔙 رجوع", "callback_data": "sales"}]])
+            edit(chat, mid, t, [[{"text":"🔙 رجوع","callback_data":"sales"}]])
         answer(c["id"])
         return
     if data.startswith("buy:"):
@@ -935,7 +888,7 @@ def handle_cb(c):
             return
         base_price = p[9] if len(p) > 9 and p[9] else int(round(p[3] * 100 / (100 + COMMISSION_RATE)))
         comm = p[3] - base_price
-        set_state(uid, "await_cod_info", {"pid": p[0], "mid": p[1], "price": p[3], "pname": p[2], "commission": comm})
+        set_state(uid, "await_cod_info", {"pid":p[0],"mid":p[1],"price":p[3],"pname":p[2],"commission":comm})
         send(chat, f"اسم المنتج: {p[2]}\nسعر المنتج: {p[3]} جنيه\nالدفع بعد الاستلام\n\nأرسل اسمك كاملًا ورقمين للتواصل وموقعك بدقة:")
         answer(c["id"])
         return
@@ -946,7 +899,7 @@ def handle_cb(c):
         edit(chat, mid, f"✅ تم قبول التاجر {mid_t}", [])
         try:
             send(mid_t, "🎉 تم قبول متجرك بعد مراجعة المستند.\nاستخدم /start لفتح لوحة التاجر وإضافة المنتجات ومتابعة الطلبات.", main_kb=True)
-        except Exception:
+        except:
             pass
         answer(c["id"])
         return
@@ -978,7 +931,7 @@ def handle_cb(c):
         if p:
             try:
                 send(p[1], f"✅ تم نشر منتجك {p[2]}", main_kb=True)
-            except Exception:
+            except:
                 pass
         answer(c["id"])
         return
@@ -1001,10 +954,33 @@ def handle_cb(c):
         edit(chat, mid, f"🔇 تم إلغاء طلب المنتج {pid}.", [])
         answer(c["id"])
         return
-    if data == "home":
+    if data=="home":
         merchant_row = db.execute("SELECT status FROM merchants WHERE user_id=?", (uid,)).fetchone()
         if merchant_row and merchant_row[0] in ["approved", "pending", "banned"]:
             open_merchant(chat, uid, mid)
         else:
             edit(chat, mid, "مرحبا بك في سوق السودان\nهنا ستجد ما تريده إن شاء الله وبأقل الأسعار.", [])
-            
+            send(chat, "مرحبا بك في سوق السودان\nهنا ستجد ما تريده إن شاء الله وبأقل الأسعار.", main_kb=True)
+        answer(c["id"])
+        return
+
+def main():
+    keep_alive()
+    setup()
+    off = 0
+    print(f"Bot Started Successfully - Commission: {COMMISSION_RATE}%")
+    while True:
+        try:
+            r = api("getUpdates", {"timeout":30, "offset":off})
+            for u in r.get("result", []):
+                off = u["update_id"]+1
+                if "message" in u:
+                    handle_msg(u["message"])
+                elif "callback_query" in u:
+                    handle_cb(u["callback_query"])
+        except Exception as e:
+            print(e)
+            time.sleep(2)
+
+if __name__=="__main__":
+    main()
