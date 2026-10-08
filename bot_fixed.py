@@ -230,7 +230,7 @@ def do_search(chat_id, query):
             words = combined.split()
             scores = [fuzzy_word_score(word, words) for word in query_words]
             thresholds = [0.70 if len(word) == 3 else 0.60 if len(word) >= 4 else 1.0 for word in query_words]
-            matched = sum(score >= threshold for score, threshold in zip(scofromesholds))
+            matched = sum(score >= threshold for score, threshold in zip(scores, thresholds))
             coverage = matched / len(query_words)
             average = sum(scores) / len(scores)
             if coverage < 0.5 or average < 0.60:
