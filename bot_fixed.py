@@ -398,9 +398,31 @@ def handle_msg(m):
         if ADMIN_ID:
             kb = [
                 [{"text": "✅ تأكيد استلام المبلغ", "callback_data": f"pay_ok:{uid}"}],
-                [{"text": "❌ رفض الإشعار", "callback_data": f"pay_no:{uid}"}]
+                [
+                    {"text": "❌ رفض سريع", "callback_data": f"pay_no:{uid}"},
+                    {"text": "✍️ رفض مع تعليق", "callback_data": f"pay_reason:{uid}"}
+                ]
             ]
             send(ADMIN_ID, f"📥 **إشعار دفع عمولة جديد:**\nالمستخدم: `{uid}`\nالمبلغ المطلوب: {debt}ج", kb, photo=photo_id)
+        return
+
+    if st and st.startswith("await_pay_reject_reason_"):
+        reason = txt
+        target_id = int(st.split("_")[4])
+        review_message_id = tmp.get("review_message_id")
+        
+        # إعادة فتح حالة إرسال الصورة للتاجر ليتمكن من إرسالها مجدداً
+        set_state(target_id, "await_payment_receipt", {})
+        
+        send(chat, f"✅ تم رفض الإشعار للمستخدم `{target_id}` وإرسال السبب له.")
+        try:
+            send(target_id, f"❌ **تم رفض إشعار التحويل.**\n\n📌 **السبب:** {reason}\n\nيرجى التأكد من صحة صورة التحويل وإعادة إرسالها للتحقق.", main_kb=True)
+        except:
+            pass
+
+        if review_message_id:
+            edit(chat, review_message_id, f"❌ تم رفض إشعار المستخدم `{target_id}`.\n📌 السبب: {reason}", [])
+        set_state(uid, None, {})
         return
 
     if st and st.startswith("await_reject_reason_"):
@@ -589,6 +611,7 @@ def handle_cb(c):
 
     if data.startswith("pay_ok:") and uid == ADMIN_ID:
         target_uid = int(data.split(":")[1])
+        set_state(target_uid, None, {})
         db.execute("UPDATE users SET unpaid_commission=0 WHERE user_id=?", (target_uid,))
         db.commit()
         edit(chat, mid, f"✅ تم تأكيد استلام العمولة وتصفير مديونية المستخدم `{target_uid}` بنجاح.", [])
@@ -600,11 +623,20 @@ def handle_cb(c):
 
     if data.startswith("pay_no:") and uid == ADMIN_ID:
         target_uid = int(data.split(":")[1])
+        # إعادة فتح الحالة ليتمكن التاجر من إرسال الصورة مجدداً
+        set_state(target_uid, "await_payment_receipt", {})
         edit(chat, mid, f"❌ تم رفض إشعار التحويل للمستخدم `{target_uid}`.", [])
         try:
             send(target_uid, "❌ **تم رفض إشعار التحويل.**\nيرجى التأكد من صحة صورة التحويل وإعادة إرسالها للتحقق.", main_kb=True)
         except: pass
         answer(c["id"], "تم الرفض")
+        return
+
+    if data.startswith("pay_reason:") and uid == ADMIN_ID:
+        target_uid = int(data.split(":")[1])
+        set_state(uid, f"await_pay_reject_reason_{target_uid}", {"review_message_id": mid})
+        edit(chat, mid, f"✍️ أرسل سبب رفض الإشعار للمستخدم `{target_uid}`:", [])
+        answer(c["id"])
         return
 
     if data=="search":
@@ -973,14 +1005,3 @@ def main():
         try:
             r = api("getUpdates", {"timeout":30, "offset":off})
             for u in r.get("result", []):
-                off = u["update_id"]+1
-                if "message" in u:
-                    handle_msg(u["message"])
-                elif "callback_query" in u:
-                    handle_cb(u["callback_query"])
-        except Exception as e:
-            print(e)
-            time.sleep(2)
-
-if __name__=="__main__":
-    main()
