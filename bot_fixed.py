@@ -999,4 +999,4 @@ def handle_cb(c):
         return
 
 def main():
-    keep_alive(
+    keep_alive() 
