@@ -232,7 +232,8 @@ def commission_panel(chat_id, merchant_id, message_id=None):
     due = totals[1] or 0
     paid = total - due
     pending = totals[2] or 0
-    text = f"💳 عمولات المتجر\n\n✅ طلبات مكتملة: {len(rows)}\n💰 إجمالي العمولات: {total}ج\n✔️ تم اعتماد سدادها: {paid}ج\n⏳ المتبقي للسداد: {due}ج"
+    completed_count = db.execute("SELECT COUNT(*) FROM orders WHERE merchant_id=? AND status='completed'", (merchant_id,)).fetchone()[0]
+    text = f"💳 عمولات المتجر\n\n✅ طلبات مكتملة: {completed_count}\n💰 إجمالي العمولات: {total}ج\n✔️ تم اعتماد سدادها: {paid}ج\n⏳ المتبقي للسداد: {due}ج"
     if pending:
         text += f"\n📨 قيد مراجعة السداد: {pending}ج"
     text += "\n\nتفاصيل آخر الطلبات المكتملة:\n"
@@ -800,6 +801,9 @@ def handle_cb(c):
         if order[4] == "completed":
             answer(c["id"], "تم تأكيد هذا الطلب مسبقاً")
             return
+        if order[4] != "shipped":
+            answer(c["id"], "لا يمكن التأكيد قبل شحن الطلب")
+            return
         buyer_id = order[0]
         merchant_id = order[1]
         price = order[2]
@@ -827,12 +831,16 @@ def handle_cb(c):
         return
     if data.startswith("dispute:"):
         oid = int(data.split(":")[1])
-        db.execute("UPDATE orders SET status='disputed' WHERE id=?", (oid,))
+        dispute_order = db.execute("SELECT buyer_id,merchant_id FROM orders WHERE id=?", (oid,)).fetchone()
+        if not dispute_order or dispute_order[0] != uid:
+            answer(c["id"], "ليس طلبك")
+            return
+        db.execute("UPDATE orders SET status='disputed' WHERE id=? AND status='shipped'", (oid,))
         db.commit()
-        edit(chat, mid, f"⚠️ شكوى #{oid} الإدارة ستتواصل")
+        edit(chat, mid, f"⚠️ تم تسجيل الشكوى للطلب #{oid}، الإدارة ستتواصل معك")
         if ADMIN_ID:
-            send(ADMIN_ID, f"⚠️ شكوى طلب #{oid}")
-        answer(c["id"])
+            send(ADMIN_ID, f"⚠️ شكوى طلب #{oid}\nالعميل: {uid}\nالتاجر: {dispute_order[1]}")
+        answer(c["id"], "تم تسجيل الشكوى")
         return
     if data=="buyer":
         kb = cat_kb("browse")
@@ -926,13 +934,4 @@ def handle_cb(c):
         p = db.execute("SELECT * FROM products WHERE id=?", (pid,)).fetchone()
         if not p:
             answer(c["id"], "غير موجود")
-            return
-        due = merchant_due(p[1])
-        if due:
-            answer(c["id"], "هذا المتجر موقوف مؤقتاً حتى تسديد العمولة")
-            send(chat, "🚫 هذا المنتج غير متاح للطلب حالياً لأن المتجر لديه عمولة مستحقة لم تُعتمد بعد.")
-            return
-        base_price = p[9] if len(p) > 9 and p[9] else int(round(p[3] * 100 / (100 + COMMISSION_RATE)))
-        comm = p[3] - base_price
-        set_state(uid, "await_cod_info", {"pid":p[0],"mid":p[1],"price":p[3],"pname":p[2],"commission":comm})
-        send(chat, f"اسم المنتج: {p[2]}\nسعر المنتج: {p[3]} جنيه\nالدفع بعد الا
+     
