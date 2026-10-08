@@ -47,7 +47,6 @@ CREATE TABLE IF NOT EXISTS referrals(id INTEGER PRIMARY KEY AUTOINCREMENT, refer
 CREATE TABLE IF NOT EXISTS referral_profits(id INTEGER PRIMARY KEY AUTOINCREMENT, referrer_id INTEGER, buyer_id INTEGER, order_id INTEGER, amount INTEGER, created_at TEXT);
 ''')
 
-# التحديثات التلقائية لقاعدة البيانات عند وجود جداول قديمة
 columns_to_add = [
     ("users", "profit_active INTEGER DEFAULT 0"),
     ("users", "referral_earnings INTEGER DEFAULT 0"),
@@ -382,7 +381,6 @@ def handle_msg(m):
         send(chat, msg, kb if kb else None, main_kb=True)
         return
 
-    # --- معالجة حالات الإذاعة (Broadcast) ---
     if st == "await_broadcast_msg" and uid == ADMIN_ID:
         set_state(uid, None, {})
         users = db.execute("SELECT user_id FROM users").fetchall()
@@ -588,7 +586,6 @@ def handle_msg(m):
         
         send(chat, f"✅ تم إرسال طلبك #{oid} إلى التاجر للتحقق من إمكانية التوصيل لموقعك.\nسيتم إعلامك فور رد التاجر.", main_kb=True)
         
-        # إرسال الطلب للتاجر مع موقعه الجغرافي وأزرار القبول أو الرفض
         merchant_id = tmp["mid"]
         kb_merchant = [
             [{"text": f"✅ أستطيع التوصيل - قبول الطلب #{oid}", "callback_data": f"merchant_accept:{oid}"}],
@@ -985,4 +982,9 @@ def handle_cb(c):
         msg = f"📊 مبيعاتك:\n📦 المنتجات: {cnt}\n✅ الطلبات المكتملة: {total}\n💰 إجمالي رسوم السوق: {total_comm}ج\n💳 العمولة غير المدفوعة العليك: {debt}ج"
         kb = [[{"text":"📋 آخر الطلبات","callback_data":"orders"}]]
         if debt > 0:
-            kb.append([{"text": "💳 دفع العمولة العليك",
+            kb.append([{"text": "💳 دفع العمولة العليك", "callback_data": "pay_commission"}])
+        kb.append([{"text":"🏠 الرئيسية","callback_data":"home"}])
+        
+        edit(chat, mid, msg, kb)
+        answer(c["id"])
+     
