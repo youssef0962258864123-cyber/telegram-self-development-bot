@@ -387,20 +387,44 @@ def handle_msg(m):
         send(chat, msg, kb if kb else None, main_kb=True)
         return
 
-    if st == "await_payment_receipt":
-        if "photo" not in m:
-            send(chat, "❌ يرجى إرسال صورة إشعار التحويل فقط.")
-            return
+    # معالجة إرسال صورة إشعار التحويل المالي (عند انتظار الإشعار أو لمن لديه عمولة مستحقة)
+    debt_val = get_user_debt(uid)
+    if "photo" in m and (st == "await_payment_receipt" or debt_val > 0):
         photo_id = m["photo"][-1]["file_id"]
-        debt = get_user_debt(uid)
         set_state(uid, None, {})
         send(chat, "✅ تم إرسال إشعار التحويل للآدمن للمراجعة والتأكيد. سيتم تفعيل حسابك فور التحقق.", main_kb=True)
         if ADMIN_ID:
             kb = [
-                [{"text": "✅ تأكيد استلام المبلغ", "callback_data": f"pay_ok:{uid}"}],
-                [{"text": "❌ رفض الإشعار", "callback_data": f"pay_no:{uid}"}]
+                [{"text": "✅ قبول", "callback_data": f"pay_ok:{uid}"}],
+                [{"text": "❌ رفض", "callback_data": f"pay_no:{uid}"}, {"text": "📝 رفض مع تعليق", "callback_data": f"pay_reason:{uid}"}]
             ]
-            send(ADMIN_ID, f"📥 **إشعار دفع عمولة جديد:**\nالمستخدم: `{uid}`\nالمبلغ المطلوب: {debt}ج", kb, photo=photo_id)
+            send(ADMIN_ID, f"📥 **إشعار دفع عمولة جديد:**\nالمستخدم: `{uid}`\nالمبلغ المطلوب: {debt_val}ج", kb, photo=photo_id)
+        return
+
+    if st == "await_payment_receipt" and "photo" not in m:
+        send(chat, "❌ يرجى إرسال صورة إشعار التحويل فقط.")
+        return
+
+    if st and st.startswith("await_pay_reject_reason_"):
+        reason = txt
+        target_uid = int(st.split("_")[-1])
+        review_message_id = tmp.get("review_message_id")
+        
+        # إعداد حالة المستخدم المستهدف ليكون جاهزاً لإعادة الإرسال فوراً
+        set_state(target_uid, "await_payment_receipt", {})
+        
+        kb_resend = [[{"text": "💳 إعادة إرسال الإشعار", "callback_data": "pay_commission"}]]
+        try:
+            send(target_uid, f"❌ **تم رفض إشعار التحويل.**\n\n📌 **السبب:** {reason}\n\nيرجى التأكد من صحة صورة التحويل وإعادة إرسالها للتحقق.", kb_resend)
+        except:
+            pass
+            
+        if review_message_id:
+            edit(chat, review_message_id, f"❌ تم رفض إشعار المستخدم `{target_uid}`.\nالسبب: {reason}", [])
+        else:
+            send(chat, f"✅ تم رفض إشعار المستخدم `{target_uid}` مع التعليق.")
+            
+        set_state(uid, None, {})
         return
 
     if st and st.startswith("await_reject_reason_"):
@@ -591,6 +615,7 @@ def handle_cb(c):
         target_uid = int(data.split(":")[1])
         db.execute("UPDATE users SET unpaid_commission=0 WHERE user_id=?", (target_uid,))
         db.commit()
+        set_state(target_uid, None, {})
         edit(chat, mid, f"✅ تم تأكيد استلام العمولة وتصفير مديونية المستخدم `{target_uid}` بنجاح.", [])
         try:
             send(target_uid, "✅ **تم تأكيد استلام العمولة بنجاح!**\nتم رفع التقييد عن حسابك ويمكنك الآن استخدام كافة خدمات البوت بحرية.", main_kb=True)
@@ -600,11 +625,20 @@ def handle_cb(c):
 
     if data.startswith("pay_no:") and uid == ADMIN_ID:
         target_uid = int(data.split(":")[1])
+        set_state(target_uid, "await_payment_receipt", {})
         edit(chat, mid, f"❌ تم رفض إشعار التحويل للمستخدم `{target_uid}`.", [])
+        kb_resend = [[{"text": "💳 إعادة إرسال الإشعار", "callback_data": "pay_commission"}]]
         try:
-            send(target_uid, "❌ **تم رفض إشعار التحويل.**\nيرجى التأكد من صحة صورة التحويل وإعادة إرسالها للتحقق.", main_kb=True)
+            send(target_uid, "❌ **تم رفض إشعار التحويل.**\nيرجى التأكد من صحة صورة التحويل وإعادة إرسالها للتحقق.", kb_resend)
         except: pass
         answer(c["id"], "تم الرفض")
+        return
+
+    if data.startswith("pay_reason:") and uid == ADMIN_ID:
+        target_uid = int(data.split(":")[1])
+        set_state(uid, f"await_pay_reject_reason_{target_uid}", {"review_message_id": mid})
+        edit(chat, mid, f"📝 أرسل سبب رفض إشعار المستخدم `{target_uid}`:", [])
+        answer(c["id"])
         return
 
     if data=="search":
@@ -767,7 +801,7 @@ def handle_cb(c):
                 except:
                     pass
         db.execute("UPDATE orders SET status='completed', referral_comm=? WHERE id=?", (referral_amount, oid))
-        db.execute("UPDATE users SET sales=sales+1, unpaid_commission=unpaid_commission+? WHERE user_id=?", (comm_amount, merchant_id))
+        db.execute("UPDATE users SET sales=sales+1, unpaid_commission=unpaid_commission+? WHERE user_id=?", (merchant_id, comm_amount))
         db.commit()
         edit(chat, mid, f"✅ تم تأكيد استلام #{oid}")
         send(merchant_id, f"🎉 المشتري أكد استلام #{oid}\nالسعر {price}ج\nعمولة البوت {comm_amount}ج ({COMMISSION_RATE}%)\n⚠️ تم تسجيل العمولة على حسابك.")
@@ -965,22 +999,4 @@ def handle_cb(c):
         return
 
 def main():
-    keep_alive()
-    setup()
-    off = 0
-    print(f"Bot Started Successfully - Commission: {COMMISSION_RATE}%")
-    while True:
-        try:
-            r = api("getUpdates", {"timeout":30, "offset":off})
-            for u in r.get("result", []):
-                off = u["update_id"]+1
-                if "message" in u:
-                    handle_msg(u["message"])
-                elif "callback_query" in u:
-                    handle_cb(u["callback_query"])
-        except Exception as e:
-            print(e)
-            time.sleep(2)
-
-if __name__=="__main__":
-    main()
+    keep_alive(
