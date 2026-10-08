@@ -37,7 +37,7 @@ db = sqlite3.connect(DB, check_same_thread=False)
 db.executescript('''
 CREATE TABLE IF NOT EXISTS users(user_id INTEGER PRIMARY KEY, state TEXT, temp TEXT, points INTEGER DEFAULT 0, purchases INTEGER DEFAULT 0, sales INTEGER DEFAULT 0, referred_by INTEGER, is_banned INTEGER DEFAULT 0, profit_active INTEGER DEFAULT 0, referral_earnings INTEGER DEFAULT 0, referral_balance INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS merchants(user_id INTEGER PRIMARY KEY, store_name TEXT, phone TEXT, city TEXT, doc_photo TEXT, status TEXT DEFAULT 'pending', reject_reason TEXT);
-CREATE TABLE IF NOT EXISTS products(id INTEGER PRIMARY KEY AUTOINCREMENT, merchant_id INTEGER, name TEXT, price INTEGER, photo_id TEXT, description TEXT, category TEXT, status TEXT DEFAULT 'pending', reject_reason TEXT);
+CREATE TABLE IF NOT EXISTS products(id INTEGER PRIMARY KEY AUTOINCREMENT, merchant_id INTEGER, name TEXT, price INTEGER, photo_id TEXT, description TEXT, category TEXT, status TEXT DEFAULT 'pending', reject_reason TEXT, base_price INTEGER);
 CREATE TABLE IF NOT EXISTS orders(id INTEGER PRIMARY KEY AUTOINCREMENT, buyer_id INTEGER, product_id INTEGER, merchant_id INTEGER, price INTEGER, commission INTEGER, referral_comm INTEGER, buyer_info TEXT, status TEXT, created_at TEXT);
 CREATE TABLE IF NOT EXISTS referrals(id INTEGER PRIMARY KEY AUTOINCREMENT, referrer_id INTEGER, referred_id INTEGER, created_at TEXT);
 CREATE TABLE IF NOT EXISTS referral_profits(id INTEGER PRIMARY KEY AUTOINCREMENT, referrer_id INTEGER, buyer_id INTEGER, order_id INTEGER, amount INTEGER, created_at TEXT);
@@ -62,6 +62,9 @@ try:
 except: pass
 try:
     db.execute("ALTER TABLE products ADD COLUMN reject_reason TEXT")
+except: pass
+try:
+    db.execute("ALTER TABLE products ADD COLUMN base_price INTEGER")
 except: pass
 try:
     db.execute("ALTER TABLE orders ADD COLUMN price INTEGER")
@@ -259,11 +262,9 @@ def show_merchant_intro(chat_id):
     keyboard = [[{"text": "✅ أنا تاجر الآن", "callback_data": "merchant"}]]
     message = (
         "🏪 إنشاء حساب تاجر\n\n"
-        "خطوات التسجيل: أرسل اسم المتجر، ثم رقم واتساب، ثم المدينة، وبعدها صورة مستند لإثبات الهوية. "
-        "سيُراجع الطلب قبل تفعيل المتجر.\n\n"
-        f"💰 عمولة السوق {COMMISSION_RATE}٪: أضفها فوق السعر الصافي الذي تريد الحصول عليه. "
-        f"ومنها، تُخصّص {REFERRAL_RATE} نقاط مئوية من قيمة العملية للشخص الذي سجّل المشتري عبر رابطه إذا كان ربح الإحالة مفعّلًا.\n\n"
-        "اضغط «أنا تاجر الآن» للبدء."
+        "بعد إنشاء حساب تاجر، يمكنك رفع منتجاتك مباشرة. عند طلب أي منتج، سيتم التواصل معك لترتيب التسليم.\n"
+        f"عمولة المتجر {COMMISSION_RATE}% تضاف تلقائياً فوق سعرك الأساسي، منها {REFERRAL_RATE}% مخصصة للمسوقين.\n"
+        "يمكن لأي شخص التسجيل والعمل كمسوق عبر البوت."
     )
     send(chat_id, message, keyboard)
 
@@ -460,24 +461,37 @@ def handle_msg(m):
     if st=="await_prod_name":
         tmp["name"] = txt
         set_state(uid, "await_prod_price", tmp)
-        send(chat, "أرسل السعر أرقام فقط:")
+        send(chat, "أرسل السعر الأساسي أرقام فقط من غير عمولة المتجر:")
         return
     if st=="await_prod_price":
-        if not txt.isdigit():
-            send(chat, "أرقام فقط:")
+        if not txt.isdigit() or int(txt) <= 0:
+            send(chat, "أرسل السعر الأساسي أرقام فقط، ويجب أن يكون أكبر من صفر:")
             return
-        tmp["price"] = int(txt)
-        set_state(uid, "await_prod_cat", tmp)
-        send(chat, "اختر قسم المنتج:", cat_kb("setcat"))
+        base_price = int(txt)
+        commission = int(round(base_price * COMMISSION_RATE / 100))
+        final_price = base_price + commission
+        tmp["base_price"] = base_price
+        tmp["price"] = final_price
+        tmp["commission"] = commission
+        set_state(uid, "await_prod_price_confirm", tmp)
+        kb = [[
+            {"text": "✅ موافق", "callback_data": "prod_price_confirm"},
+            {"text": "❌ رفض / تعديل", "callback_data": "prod_price_cancel"}
+        ]]
+        send(chat, f"💰 السعر الأساسي: {base_price}ج\n🏪 عمولة المتجر ({COMMISSION_RATE}%): {commission}ج\n💵 سيتم رفع المنتج بسعر: {final_price}ج\n\nهل توافق على السعر؟", kb)
+        return
+
+    if st=="await_prod_price_confirm":
+        send(chat, "استخدم أزرار الموافقة أو الرفض الظاهرة أسفل رسالة السعر.")
         return
     if st=="await_prod_desc":
         tmp["desc"] = txt
-        db.execute("INSERT INTO products(merchant_id,name,price,photo_id,description,category,status) VALUES(?,?,?,?,?,?,?)", (uid, tmp["name"], tmp["price"], tmp["photo"], tmp["desc"], tmp.get("cat","📦 أخرى"), "pending"))
+        db.execute("INSERT INTO products(merchant_id,name,price,base_price,photo_id,description,category,status) VALUES(?,?,?,?,?,?,?,?)", (uid, tmp["name"], tmp["price"], tmp.get("base_price", tmp["price"]), tmp["photo"], tmp["desc"], tmp.get("cat","📦 أخرى"), "pending"))
         db.commit()
         pid = db.execute("SELECT last_insert_rowid()").fetchone()[0]
         set_state(uid, None, {})
-        comm = int(tmp["price"] * COMMISSION_RATE / 100)
-        send(chat, f"✅ تم رفع المنتج في {tmp.get('cat')}\nالسعر: {tmp['price']}ج\nبانتظار الموافقة.", main_kb=True)
+        comm = tmp.get("commission", int(tmp["price"] * COMMISSION_RATE / 109))
+        send(chat, f"✅ تم رفع المنتج في {tmp.get('cat')}\nالسعر الأساسي: {tmp.get('base_price', tmp['price'])}ج\nعمولة المتجر: {comm}ج\nسعر البيع: {tmp['price']}ج\nبانتظار الموافقة.", main_kb=True)
         kb = []
         kb.append([{"text":"✅ قبول","callback_data":f"p_ok:{pid}"}])
         kb.append([{"text":"⏳ رفض مؤقت","callback_data":f"p_reject_temp:{pid}"},{"text":"🚫 رفض نهائي","callback_data":f"p_reject_perm:{pid}"}])
@@ -486,7 +500,7 @@ def handle_msg(m):
             send(ADMIN_ID, f"🔔 منتج جديد:\n{tmp['name']} - {tmp['price']}ج\nعمولة {comm}ج", kb, photo=tmp["photo"])
         return
     if st=="await_cod_info":
-        commission = int(tmp["price"] * COMMISSION_RATE / 100)
+        commission = tmp.get("commission", int(round(tmp["price"] * COMMISSION_RATE / (100 + COMMISSION_RATE))))
         db.execute("INSERT INTO orders(buyer_id,product_id,merchant_id,price,commission,buyer_info,status,created_at) VALUES(?,?,?,?,?,?,?,?)", (uid, tmp["pid"], tmp["mid"], tmp["price"], commission, txt, "pending_shipment", time.strftime("%Y-%m-%d")))
         db.commit()
         oid = db.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -738,6 +752,25 @@ def handle_cb(c):
         open_merchant(chat, uid, mid)
         answer(c["id"])
         return
+    if data=="prod_price_confirm":
+        if get_state(uid) != "await_prod_price_confirm":
+            answer(c["id"], "انتهت جلسة التسعير أو تم التعامل معها مسبقاً")
+            return
+        tmp = get_temp(uid)
+        set_state(uid, "await_prod_cat", tmp)
+        edit(chat, mid, f"✅ تم اعتماد السعر النهائي {tmp['price']}ج\nاختر قسم المنتج:", cat_kb("setcat"))
+        answer(c["id"], "تم اعتماد السعر")
+        return
+
+    if data=="prod_price_cancel":
+        if get_state(uid) != "await_prod_price_confirm":
+            answer(c["id"], "انتهت جلسة التسعير أو تم التعامل معها مسبقاً")
+            return
+        set_state(uid, "await_prod_price", {})
+        edit(chat, mid, "❌ تم إلغاء السعر. أرسل السعر الأساسي الجديد أرقام فقط من غير عمولة المتجر:")
+        answer(c["id"], "أرسل السعر الجديد")
+        return
+
     if data.startswith("setcat:"):
         cat = data.split(":", 1)[1]
         tmp = get_temp(uid)
@@ -775,9 +808,10 @@ def handle_cb(c):
         if not p:
             answer(c["id"], "غير موجود")
             return
-        comm = int(p[3] * COMMISSION_RATE / 100)
+        base_price = p[9] if len(p) > 9 and p[9] else int(round(p[3] * 100 / (100 + COMMISSION_RATE)))
+        comm = p[3] - base_price
         set_state(uid, "await_cod_info", {"pid":p[0],"mid":p[1],"price":p[3],"pname":p[2],"commission":comm})
-        send(chat, f"📦 {p[2]}\n💰 {p[3]}ج عند الاستلام فقط\nأرسل الاسم - الهاتف - العنوان:")
+        send(chat, f"اسم المنتج: {p[2]}\nسعر المنتج: {p[3]} جنيه\nالدفع بعد الاستلام\n\nأرسل اسمك كاملًا ورقمين للتواصل وموقعك بدقة:")
         answer(c["id"])
         return
     if data.startswith("m_ok:"):
