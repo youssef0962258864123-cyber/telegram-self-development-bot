@@ -28,8 +28,8 @@ def keep_alive():
 # --- إعدادات البوت وقاعدة البيانات ---
 TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
-BOT_USERNAME = "Develop_yourself_bot"
-ADMIN_CONTACT = os.environ.get("ADMIN_CONTACT", "@admin")
+BOT_USERNAME = "Develop_yourself_bot"  # معرف البوت المباشر
+ADMIN_CONTACT = "@admin"
 REQUIRED_CHANNEL = "-1004311192683"  # معرف قناة النشر والاشتراك الإجباري
 COMMISSION_RATE = 9
 REFERRAL_RATE = 4
@@ -112,12 +112,14 @@ def send(chat_id, text, kb=None, photo=None, main_kb=False):
             store_button = "🏪 لوحة متجري" if merchant_row[0] == "approved" else "🏪 حالة متجري"
             keyboard = [
                 ["🛍️ تسوق", "🔍 بحث عن منتج"],
-                [store_button, "💰 الربح من البوت"]
+                [store_button, "💰 الربح من البوت"],
+                ["☎️ خدمة العملاء"]
             ]
         else:
             keyboard = [
                 ["🛍️ تسوق", "🔍 بحث عن منتج"],
-                ["🏪 إنشاء حساب تاجر", "💰 الربح من البوت"]
+                ["🏪 إنشاء حساب تاجر", "💰 الربح من البوت"],
+                ["☎️ خدمة العملاء"]
             ]
         if debt > 0:
             keyboard.append(["💳 دفع العمولة"])
@@ -357,6 +359,14 @@ def handle_msg(m):
         send_payment_info(chat, uid)
         return
 
+    if txt in ["☎️ خدمة العملاء", "خدمة العملاء"]:
+        kb = [
+            [{"text": "💬 مراسلة عبر واتساب", "url": "https://wa.me/249908130152"}],
+            [{"text": "✈️ مراسلة عبر تيليجرام", "url": "https://t.me/Youseef_of_SD"}]
+        ]
+        send(chat, "☎️ **خدمة عملاء سوق السودان**\n\nإذا واجهتك أي مشكلة أو استفسار، يسعدنا تواصلك معنا عبر وسائل الاتصال التالية:", kb, main_kb=True)
+        return
+
     if txt in ["🛍️ تسوق", "تسوق", "🛍️ تصفح السوق"]:
         set_state(uid, None, {})
         show_market(chat)
@@ -389,7 +399,6 @@ def handle_msg(m):
         parts = txt.split()
         if len(parts) > 1:
             param = parts[1]
-            # التعامل مع رابط الشراء المباشر من القناة (buy_ID)
             if param.startswith("buy_"):
                 try:
                     pid = int(param.split("_")[1])
@@ -648,7 +657,7 @@ def handle_msg(m):
         set_state(uid, "await_prod_name", tmp)
         send(chat, "الصورة وصلت ✅\nأرسل اسم المنتج:")
         return
-    if len(txt)>=2 and st is None and txt not in ["📊 حسابي","💰 تفعيل الربح","☎️ خدمة العملاء","🔄 تحديث /start","🔍 بحث","🔍 بحث عن منتج","بحث عن منتج","🛍️ تسوق","تسوق","🏪 إنشاء حساب تاجر","إنشاء حساب تاجر","💰 الربح من البوت","أنا تاجر الآن","حسابي", "💳 دفع العمولة", "دفع العمولة"]:
+    if len(txt)>=2 and st is None and txt not in ["📊 حسابي","💰 تفعيل الربح","☎️ خدمة العملاء","خدمة العملاء","🔄 تحديث /start","🔍 بحث","🔍 بحث عن منتج","بحث عن منتج","🛍️ تسوق","تسوق","🏪 إنشاء حساب تاجر","إنشاء حساب تاجر","💰 الربح من البوت","أنا تاجر الآن","حسابي", "💳 دفع العمولة", "دفع العمولة"]:
         do_search(chat, txt)
         return
 def handle_cb(c):
