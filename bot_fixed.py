@@ -556,13 +556,12 @@ def handle_msg(m):
             send(ADMIN_ID, f"🔔 منتج جديد:\n{tmp['name']} - {tmp['price']}ج\nعمولة {comm}ج", kb, photo=tmp["photo"])
         return
 
-    # --- التعديل 1: استلام الموقع من المشتري للتحقق أولاً ---
+    # --- التحقق من الموقع أولاً ---
     if st == "await_location":
         tmp["location"] = txt
         set_state(uid, "await_merchant_delivery", tmp)
         send(chat, "⏳ جاري التحقق من التاجر إذا كان التوصيل متاحاً لموقعك... الرجاء الانتظار، سنعلمك فور رده.", main_kb=True)
         
-        # إرسال رسالة للتاجر للتأكيد
         kb = [
             [{"text": "✅ نعم، التوصيل متاح", "callback_data": f"loc_ok:{uid}"}],
             [{"text": "❌ لا، غير متاح للموقع", "callback_data": f"loc_no:{uid}"}]
@@ -570,11 +569,9 @@ def handle_msg(m):
         send(tmp["mid"], f"🔔 **طلب استفسار عن إمكانية التوصيل!**\n\n📦 المنتج: {tmp['pname']}\n📍 موقع المشتري المقترح:\n{txt}\n\nهل يمكنك التوصيل لهذا الموقع؟", kb)
         return
 
-    # --- التعديل 2: استلام الاسم والرقم بعد موافقة التاجر على الموقع ---
+    # --- استلام الاسم والرقم بعد موافقة التاجر ---
     if st=="await_cod_info":
         commission = tmp.get("commission", int(round(tmp["price"] * COMMISSION_RATE / (100 + COMMISSION_RATE))))
-        
-        # دمج الموقع مع الاسم والأرقام الجديدة
         location = tmp.get("location", "غير محدد")
         full_buyer_info = f"الاسم والأرقام: {txt}\nالموقع: {location}"
         
@@ -587,7 +584,6 @@ def handle_msg(m):
         
         send(chat, f"✅ تم تأكيد وتسجيل طلبك #{oid} بنجاح!\nالمنتج: {tmp['pname']}\nالسعر: {tmp['price']}ج\n(الدفع عند الاستلام)\n\nسيتواصل التاجر معك قريباً لترتيب التسليم.", main_kb=True)
         
-        # إرسال إشعار نهائي للتاجر مع زر الشحن
         kb_ship = []
         kb_ship.append([{"text":f"📦 تم الشحن - طلب #{oid}","callback_data":f"ship:{oid}"}])
         send(tmp["mid"], f"🔔 **طلب جديد تم تأكيده!** #{oid}\nالمنتج: {tmp['pname']}\nالسعر: {tmp['price']}ج\n\n👤 **بيانات الزبون كاملة:**\n{full_buyer_info}\n\nعند شحن الطلب وتسليمه للمندوب، اضغط الزر أدناه:", kb_ship)
@@ -623,7 +619,6 @@ def handle_msg(m):
     if len(txt)>=2 and st is None and txt not in ["📊 حسابي","💰 تفعيل الربح","☎️ خدمة العملاء","🔄 تحديث /start","🔍 بحث","🔍 بحث عن منتج","بحث عن منتج","🛍️ تسوق","تسوق","🏪 إنشاء حساب تاجر","إنشاء حساب تاجر","💰 الربح من البوت","أنا تاجر الآن","حسابي", "💳 دفع العمولة", "دفع العمولة"]:
         do_search(chat, txt)
         return
-
 def handle_cb(c):
     uid = c["from"]["id"]
     chat = c["message"]["chat"]["id"]
@@ -653,7 +648,7 @@ def handle_cb(c):
         answer(c["id"], "أرسل سبب الرفض")
         return
 
-    # --- التعديل 3: التعامل مع رد التاجر على إمكانية التوصيل للموقع ---
+    # --- استجابة التاجر لموقع المشتري ---
     if data.startswith("loc_ok:"):
         buyer_uid = int(data.split(":")[1])
         buyer_tmp = get_temp(buyer_uid)
@@ -685,7 +680,6 @@ def handle_cb(c):
             edit(chat, mid, "عذراً، يبدو أن المشتري ألغى الطلب مسبقاً.")
         answer(c["id"], "تم الرفض")
         return
-    # -------------------------------------------------------------
 
     if data=="search":
         set_state(uid, "await_search", {})
@@ -963,7 +957,7 @@ def handle_cb(c):
         answer(c["id"])
         return
 
-    # --- التعديل 4: طلب الموقع من المشتري عند الضغط على شراء ---
+    # --- طلب الموقع عند الشراء ---
     if data.startswith("buy:"):
         if check_debt_and_block(chat, uid):
             answer(c["id"], "عليك عمولة مستحقة")
@@ -980,9 +974,8 @@ def handle_cb(c):
         send(chat, f"📦 المنتج: {p[2]}\n💰 السعر: {p[3]} جنيه\n\n📍 للتحقق من إمكانية التوصيل، **أرسل موقعك بدقة** (المدينة، الحي، أو وصف دقيق للمكان):")
         answer(c["id"])
         return
-    # -------------------------------------------------------------
 
-        if data.startswith("m_ok:"):
+    if data.startswith("m_ok:"):
         mid_t = int(data.split(":")[1])
         db.execute("UPDATE merchants SET status='approved', reject_reason='' WHERE user_id=?", (mid_t,))
         db.commit()
