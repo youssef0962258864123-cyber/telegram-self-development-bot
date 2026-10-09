@@ -385,11 +385,44 @@ def handle_msg(m):
         link = f"https://t.me/{BOT_USERNAME}?start={uid}"
         send(chat, f"🎉 تم تفعيل الربح من البوت بنسبة {REFERRAL_RATE}٪\n\nتكسب {REFERRAL_RATE}٪ من قيمة كل عملية شراء مكتملة يقوم بها شخص سجّل من رابطك.\n\n🔗 رابطك الخاص:\n{link}\n\nشارك الرابط مع الآخرين ليتم تسجيلهم من خلاله.", main_kb=True)
         return
-    if txt in ["🔄 تحديث /start","🔄 تحديث","تحديث","/start","start"]:
+    if txt in ["🔄 تحديث /start","🔄 تحديث","تحديث","/start","start"] or txt.startswith("/start"):
+        parts = txt.split()
+        if len(parts) > 1:
+            param = parts[1]
+            # التعامل مع رابط الشراء المباشر من القناة (buy_ID)
+            if param.startswith("buy_"):
+                try:
+                    pid = int(param.split("_")[1])
+                    p = db.execute("SELECT * FROM products WHERE id=?", (pid,)).fetchone()
+                    if p:
+                        base_price = p[9] if len(p) > 9 and p[9] else int(round(p[3] * 100 / (100 + COMMISSION_RATE)))
+                        comm = p[3] - base_price
+                        set_state(uid, "await_location", {"pid":p[0],"mid":p[1],"price":p[3],"pname":p[2],"commission":comm})
+                        send(chat, f"📦 المنتج: {p[2]}\n💰 السعر: {p[3]} جنيه\n\n📍 للتحقق من إمكانية التوصيل، **أرسل موقعك بدقة** (المدينة، الحي، أو وصف دقيق للمكان):", main_kb=True)
+                        return
+                except:
+                    pass
+            elif param.isdigit():
+                ref_id = int(param)
+                if ref_id != uid:
+                    already = db.execute("SELECT * FROM referrals WHERE referred_id=?", (uid,)).fetchone()
+                    user_ref = db.execute("SELECT referred_by FROM users WHERE user_id=?", (uid,)).fetchone()
+                    if not already and (not user_ref or not user_ref[0]):
+                        db.execute("INSERT INTO referrals(referrer_id,referred_id,created_at) VALUES(?,?,?)", (ref_id, uid, time.strftime("%Y-%m-%d")))
+                        db.execute("UPDATE users SET points=points+10 WHERE user_id=?", (ref_id,))
+                        db.execute("UPDATE users SET referred_by=? WHERE user_id=?", (ref_id, uid))
+                        db.commit()
+                        try:
+                            send(ref_id, f"🎉 إحالة جديدة!\nشخص سجل عبر رابطك\n+10 نقاط\nإذا فعلت الربح {REFERRAL_RATE}% ستكسب من مشترياته مدى الحياة!")
+                        except:
+                            pass
         set_state(uid, None, {})
-        st = None
-        tmp = {}
-        txt = "/start"
+        merchant_row = db.execute("SELECT status FROM merchants WHERE user_id=?", (uid,)).fetchone()
+        if merchant_row and merchant_row[0] == "approved":
+            open_merchant(chat, uid)
+            return
+        send(chat, "مرحبا بك في سوق السودان \nهنا ستجد ما تريده إن شاء الله وبأقل الأسعار.", main_kb=True)
+        return
     if txt in ["📊 حسابي","حسابي"]:
         row = db.execute("SELECT points,purchases,sales,profit_active,referral_earnings,referral_balance,unpaid_commission FROM users WHERE user_id=?", (uid,)).fetchone()
         points = row[0] if row else 0
@@ -614,28 +647,6 @@ def handle_msg(m):
         tmp["photo"] = m["photo"][-1]["file_id"]
         set_state(uid, "await_prod_name", tmp)
         send(chat, "الصورة وصلت ✅\nأرسل اسم المنتج:")
-        return
-    if txt.startswith("/start"):
-        parts = txt.split()
-        if len(parts)>1 and parts[1].isdigit():
-            ref_id = int(parts[1])
-            if ref_id!=uid:
-                already = db.execute("SELECT * FROM referrals WHERE referred_id=?", (uid,)).fetchone()
-                user_ref = db.execute("SELECT referred_by FROM users WHERE user_id=?", (uid,)).fetchone()
-                if not already and (not user_ref or not user_ref[0]):
-                    db.execute("INSERT INTO referrals(referrer_id,referred_id,created_at) VALUES(?,?,?)", (ref_id, uid, time.strftime("%Y-%m-%d")))
-                    db.execute("UPDATE users SET points=points+10 WHERE user_id=?", (ref_id,))
-                    db.execute("UPDATE users SET referred_by=? WHERE user_id=?", (ref_id, uid))
-                    db.commit()
-                    try:
-                        send(ref_id, f"🎉 إحالة جديدة!\nشخص سجل عبر رابطك\n+10 نقاط\nإذا فعلت الربح {REFERRAL_RATE}% ستكسب من مشترياته مدى الحياة!")
-                    except:
-                        pass
-        merchant_row = db.execute("SELECT status FROM merchants WHERE user_id=?", (uid,)).fetchone()
-        if merchant_row and merchant_row[0] == "approved":
-            open_merchant(chat, uid)
-            return
-        send(chat, "مرحبا بك في سوق السودان \nهنا ستجد ما تريده إن شاء الله وبأقل الأسعار.", main_kb=True)
         return
     if len(txt)>=2 and st is None and txt not in ["📊 حسابي","💰 تفعيل الربح","☎️ خدمة العملاء","🔄 تحديث /start","🔍 بحث","🔍 بحث عن منتج","بحث عن منتج","🛍️ تسوق","تسوق","🏪 إنشاء حساب تاجر","إنشاء حساب تاجر","💰 الربح من البوت","أنا تاجر الآن","حسابي", "💳 دفع العمولة", "دفع العمولة"]:
         do_search(chat, txt)
