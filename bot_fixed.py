@@ -30,6 +30,7 @@ TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "your_bot")
 ADMIN_CONTACT = os.environ.get("ADMIN_CONTACT", "@admin")
+REQUIRED_CHANNEL = "-1004311192683"  # معرف قناة النشر والاشتراك الإجباري
 COMMISSION_RATE = 9
 REFERRAL_RATE = 4
 API = f"https://api.telegram.org/bot{TOKEN}"
@@ -169,6 +170,19 @@ def get_state(uid):
 def get_user_debt(uid):
     row = db.execute("SELECT unpaid_commission FROM users WHERE user_id=?", (uid,)).fetchone()
     return row[0] if row and row[0] else 0
+
+def check_user_subscription(user_id):
+    if not REQUIRED_CHANNEL:
+        return True
+    try:
+        res = api("getChatMember", {"chat_id": REQUIRED_CHANNEL, "user_id": user_id})
+        if res and res.get("ok"):
+            status = res["result"].get("status")
+            if status in ["member", "administrator", "creator"]:
+                return True
+        return False
+    except:
+        return False
 
 def check_debt_and_block(chat_id, uid):
     debt = get_user_debt(uid)
@@ -328,6 +342,15 @@ def handle_msg(m):
     banned_row = db.execute("SELECT is_banned FROM users WHERE user_id=?", (uid,)).fetchone()
     if banned_row and banned_row[0]==1 and uid!=ADMIN_ID:
         send(chat, "🚫 محظور، تواصل: "+ADMIN_CONTACT)
+        return
+
+    # فحص الاشتراك الإجباري
+    if not check_user_subscription(uid) and uid != ADMIN_ID:
+        kb = [
+            [{"text": "📢 اضغط هنا للانضمام للقناة", "url": "https://t.me/+-1004311192683"}], # استبدل الرابط برابط قناتك العام أو دعوة خاصة
+            [{"text": "🔄 تحقق من الاشتراك", "callback_data": "check_sub"}]
+        ]
+        send(chat, "⚠️ **عذراً، يجب عليك الاشتراك في قناة السوق أولاً لتتمكن من استخدام البوت واستعراض المنتجات!**\n\nانضم للقناة ثم اضغط زر التحقق أدناه:", kb)
         return
 
     if txt in ["💳 دفع العمولة", "دفع العمولة"]:
@@ -556,7 +579,6 @@ def handle_msg(m):
             send(ADMIN_ID, f"🔔 منتج جديد:\n{tmp['name']} - {tmp['price']}ج\nعمولة {comm}ج", kb, photo=tmp["photo"])
         return
 
-    # --- التحقق من الموقع أولاً ---
     if st == "await_location":
         tmp["location"] = txt
         set_state(uid, "await_merchant_delivery", tmp)
@@ -569,7 +591,6 @@ def handle_msg(m):
         send(tmp["mid"], f"🔔 **طلب استفسار عن إمكانية التوصيل!**\n\n📦 المنتج: {tmp['pname']}\n📍 موقع المشتري المقترح:\n{txt}\n\nهل يمكنك التوصيل لهذا الموقع؟", kb)
         return
 
-    # --- استلام الاسم والرقم بعد موافقة التاجر ---
     if st=="await_cod_info":
         commission = tmp.get("commission", int(round(tmp["price"] * COMMISSION_RATE / (100 + COMMISSION_RATE))))
         location = tmp.get("location", "غير محدد")
@@ -625,6 +646,14 @@ def handle_cb(c):
     mid = c["message"]["message_id"]
     data = c["data"]
 
+    if data == "check_sub":
+        if check_user_subscription(uid):
+            edit(chat, mid, "✅ تم التحقق من اشتراكك بنجاح! يمكنك الآن استخدام البوت.")
+            send(chat, "مرحبا بك في سوق السودان \nهنا ستجد ما تريده إن شاء الله وبأقل الأسعار.", main_kb=True)
+        else:
+            answer(c["id"], "⚠️ لم تقم بالاشتراك في القناة بعد!")
+        return
+
     if data == "pay_commission":
         send_payment_info(chat, uid)
         answer(c["id"])
@@ -648,7 +677,6 @@ def handle_cb(c):
         answer(c["id"], "أرسل سبب الرفض")
         return
 
-    # --- استجابة التاجر لموقع المشتري ---
     if data.startswith("loc_ok:"):
         buyer_uid = int(data.split(":")[1])
         buyer_tmp = get_temp(buyer_uid)
@@ -763,7 +791,7 @@ def handle_cb(c):
     if data=="admin_orders" and uid==ADMIN_ID:
         rows = db.execute("SELECT o.id, o.price, o.status, o.created_at, p.name FROM orders o LEFT JOIN products p ON p.id=o.product_id ORDER BY o.id DESC LIMIT 10").fetchall()
         if not rows:
-            edit(chat, mid, "🧾 لا توجد طلبات محفوظة حتى الآن.", [[{"text":"🔙 لوحة الأدمن","callback_data":"admin_panel"}]])
+            edit(chat, mid, "🧾 لا توجد طلبات محفوظة حتى الآن.", [[{"text":"🔙 لوحة الأدمن","callback_data":"admin_orders"}]])
         else:
             lines = ["🧾 آخر طلبات العملاء المحفوظة (حتى 10):"]
             keyboard = []
@@ -771,7 +799,7 @@ def handle_cb(c):
                 product_name = row[4] or "منتج محذوف/غير متاح"
                 lines.append(f"#{row[0]} — {product_name[:30]} — {row[1]}ج — {row[2]} — {row[3] or ''}")
                 keyboard.append([{"text": f"تفاصيل الطلب #{row[0]}", "callback_data": f"admin_order:{row[0]}"}])
-            keyboard.append([{"text":"🔙 لوحة الأدمن","callback_data":"admin_panel"}])
+            keyboard.append([{"text":"🔙 لوحة الأدمن","callback_data":"admin_orders"}])
             edit(chat, mid, "\n".join(lines), keyboard)
         answer(c["id"])
         return
@@ -957,7 +985,6 @@ def handle_cb(c):
         answer(c["id"])
         return
 
-    # --- طلب الموقع عند الشراء ---
     if data.startswith("buy:"):
         if check_debt_and_block(chat, uid):
             answer(c["id"], "عليك عمولة مستحقة")
@@ -1005,12 +1032,21 @@ def handle_cb(c):
         edit(chat, mid, f"🔇 تم إلغاء طلب التاجر {mid_t}.", [])
         answer(c["id"])
         return
+        
     if data.startswith("p_ok:"):
         pid = int(data.split(":")[1])
         db.execute("UPDATE products SET status='approved', reject_reason='' WHERE id=?", (pid,))
         db.commit()
         p = db.execute("SELECT * FROM products WHERE id=?", (pid,)).fetchone()
         edit(chat, mid, f"✅ تم نشر {p[2] if p else pid}", [])
+        
+        # نشر المنتج تلقائياً في القناة
+        if p and REQUIRED_CHANNEL:
+            store = db.execute("SELECT store_name FROM merchants WHERE user_id=?", (p[1],)).fetchone()
+            sname = store[0] if store else "متجر"
+            kb_channel = [[{"text": f"🛒 شراء المنتج ({p[3]}ج)", "url": f"https://t.me/{BOT_USERNAME}?start=buy_{p[0]}"}]]
+            send(REQUIRED_CHANNEL, f"🔥 **منتج جديد في سوق السودان!**\n\n📦 {p[2]}\n💰 السعر: {p[3]} جنيه\n📝 الوصف: {p[5]}\n🏷️ القسم: {p[6]}\n🏪 البائع: {sname}", kb_channel, photo=p[4])
+
         if p:
             try:
                 send(p[1], f"✅ تم نشر منتجك {p[2]}", main_kb=True)
@@ -1018,6 +1054,7 @@ def handle_cb(c):
                 pass
         answer(c["id"])
         return
+
     if data.startswith("p_reject_temp:"):
         target = int(data.split(":")[1])
         set_state(uid, f"await_reject_reason_temp_p_{target}", {"review_message_id": mid})
