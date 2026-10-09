@@ -39,7 +39,6 @@ CATEGORIES = ["👕 ملابس", "🍳 أواني منزلية", "🔥 عروض 
 
 db = sqlite3.connect(DB, check_same_thread=False)
 
-# تم التعديل هنا: إضافة selfie_photo لجدول التجار
 db.executescript('''
 CREATE TABLE IF NOT EXISTS users(user_id INTEGER PRIMARY KEY, state TEXT, temp TEXT, points INTEGER DEFAULT 0, purchases INTEGER DEFAULT 0, sales INTEGER DEFAULT 0, referred_by INTEGER, is_banned INTEGER DEFAULT 0, profit_active INTEGER DEFAULT 0, referral_earnings INTEGER DEFAULT 0, referral_balance INTEGER DEFAULT 0, unpaid_commission INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS merchants(user_id INTEGER PRIMARY KEY, store_name TEXT, phone TEXT, city TEXT, doc_photo TEXT, selfie_photo TEXT, status TEXT DEFAULT 'pending', reject_reason TEXT);
@@ -62,7 +61,6 @@ try: db.execute("ALTER TABLE users ADD COLUMN unpaid_commission INTEGER DEFAULT 
 except: pass
 try: db.execute("ALTER TABLE merchants ADD COLUMN doc_photo TEXT")
 except: pass
-# إضافة عمود السيلفي في حال كانت القاعدة القديمة موجودة
 try: db.execute("ALTER TABLE merchants ADD COLUMN selfie_photo TEXT")
 except: pass
 try: db.execute("ALTER TABLE merchants ADD COLUMN reject_reason TEXT")
@@ -276,7 +274,7 @@ def open_merchant(chat_id, uid, message_id=None):
     set_state(uid, None, {})
     merchant = db.execute("SELECT * FROM merchants WHERE user_id=?", (uid,)).fetchone()
     if merchant:
-        status = merchant[6] if len(merchant) >= 7 else merchant[5] # التعديل بسبب إضافة عمود جديد
+        status = merchant[6] if len(merchant) >= 7 else merchant[5]
         if status == "banned":
             text, keyboard = "🚫 حساب التاجر موقوف. تواصل مع خدمة العملاء.", None
         elif status == "pending":
@@ -488,8 +486,6 @@ def handle_msg(m):
         set_state(uid, "await_doc", tmp)
         send(chat, f"✅ استلمنا مدينتك: {txt}\n\nأرسل صورة واضحة لمستند الهوية (بطاقة شخصية أو جواز سفر أو رخصة). أرسل صورة فقط.")
         return
-    
-    # --- التعديل هنا: بعد المستند نطلب السيلفي ---
     if st=="await_doc":
         if "photo" not in m:
             send(chat, "❌ أرسل صورة المستند، ليس نص:")
@@ -499,8 +495,6 @@ def handle_msg(m):
         set_state(uid, "await_selfie", tmp)
         send(chat, "✅ تم استلام صورة الهوية.\n\nالخطوة الأخيرة: أرسل صورة (سيلفي) لك وأنت تحمل هويتك بجوار وجهك لتأكيد هويتك. أرسل صورة فقط.")
         return
-
-    # --- التعديل هنا: استلام السيلفي وحفظ الطلب ---
     if st=="await_selfie":
         if "photo" not in m:
             send(chat, "❌ أرسل صورة السيلفي مع الهوية، وليس نص:")
@@ -517,9 +511,7 @@ def handle_msg(m):
             kb.append([{"text":"✅ قبول","callback_data":f"m_ok:{uid}"}])
             kb.append([{"text":"⏳ رفض مؤقت","callback_data":f"m_reject_temp:{uid}"},{"text":"🚫 رفض نهائي","callback_data":f"m_reject_perm:{uid}"}])
             kb.append([{"text":"🔇 كانسل","callback_data":f"m_no:{uid}"}])
-            # إرسال البطاقة للأدمن
             send(ADMIN_ID, f"🔔 صورة الهوية لطلب المتجر: {tmp['store_name']}", photo=doc_id)
-            # إرسال السيلفي مع الأزرار
             send(ADMIN_ID, f"🔔 صورة السيلفي وبيانات التاجر:\nالاسم: {tmp['store_name']}\nالهاتف: {tmp['phone']}\nالمدينة: {tmp['city']}\nID:{uid}", kb, photo=selfie_id)
         return
 
@@ -545,7 +537,6 @@ def handle_msg(m):
         ]]
         send(chat, f"💰 مبلغ الطلب بدون عمولة: {base_price:,.0f}ج\nقيمة العمولة ({COMMISSION_RATE}%): {commission:,.0f}ج\n\n📌 **سيتم نشره بي سعر:** {final_price:,.0f}ج\n\nهل توافق على السعر؟", kb)
         return
-
     if st=="await_prod_price_confirm":
         send(chat, "استخدم أزرار الموافقة أو الرفض الظاهرة أسفل رسالة السعر.")
         return
@@ -564,19 +555,44 @@ def handle_msg(m):
         if ADMIN_ID:
             send(ADMIN_ID, f"🔔 منتج جديد:\n{tmp['name']} - {tmp['price']}ج\nعمولة {comm}ج", kb, photo=tmp["photo"])
         return
+
+    # --- التعديل 1: استلام الموقع من المشتري للتحقق أولاً ---
+    if st == "await_location":
+        tmp["location"] = txt
+        set_state(uid, "await_merchant_delivery", tmp)
+        send(chat, "⏳ جاري التحقق من التاجر إذا كان التوصيل متاحاً لموقعك... الرجاء الانتظار، سنعلمك فور رده.", main_kb=True)
+        
+        # إرسال رسالة للتاجر للتأكيد
+        kb = [
+            [{"text": "✅ نعم، التوصيل متاح", "callback_data": f"loc_ok:{uid}"}],
+            [{"text": "❌ لا، غير متاح للموقع", "callback_data": f"loc_no:{uid}"}]
+        ]
+        send(tmp["mid"], f"🔔 **طلب استفسار عن إمكانية التوصيل!**\n\n📦 المنتج: {tmp['pname']}\n📍 موقع المشتري المقترح:\n{txt}\n\nهل يمكنك التوصيل لهذا الموقع؟", kb)
+        return
+
+    # --- التعديل 2: استلام الاسم والرقم بعد موافقة التاجر على الموقع ---
     if st=="await_cod_info":
         commission = tmp.get("commission", int(round(tmp["price"] * COMMISSION_RATE / (100 + COMMISSION_RATE))))
-        db.execute("INSERT INTO orders(buyer_id,product_id,merchant_id,price,commission,buyer_info,status,created_at) VALUES(?,?,?,?,?,?,?,?)", (uid, tmp["pid"], tmp["mid"], tmp["price"], commission, txt, "pending_shipment", time.strftime("%Y-%m-%d")))
+        
+        # دمج الموقع مع الاسم والأرقام الجديدة
+        location = tmp.get("location", "غير محدد")
+        full_buyer_info = f"الاسم والأرقام: {txt}\nالموقع: {location}"
+        
+        db.execute("INSERT INTO orders(buyer_id,product_id,merchant_id,price,commission,buyer_info,status,created_at) VALUES(?,?,?,?,?,?,?,?)", (uid, tmp["pid"], tmp["mid"], tmp["price"], commission, full_buyer_info, "pending_shipment", time.strftime("%Y-%m-%d")))
         db.commit()
         oid = db.execute("SELECT last_insert_rowid()").fetchone()[0]
         db.execute("UPDATE users SET purchases=purchases+1 WHERE user_id=?", (uid,))
         db.commit()
         set_state(uid, None, {})
-        send(chat, f"✅ تم تسجيل طلبك #{oid} في قاعدة البيانات\nالمنتج: {tmp['pname']}\nالسعر: {tmp['price']}ج\nالدفع عند الاستلام فقط\nالتاجر سيتواصل معك.", main_kb=True)
+        
+        send(chat, f"✅ تم تأكيد وتسجيل طلبك #{oid} بنجاح!\nالمنتج: {tmp['pname']}\nالسعر: {tmp['price']}ج\n(الدفع عند الاستلام)\n\nسيتواصل التاجر معك قريباً لترتيب التسليم.", main_kb=True)
+        
+        # إرسال إشعار نهائي للتاجر مع زر الشحن
         kb_ship = []
         kb_ship.append([{"text":f"📦 تم الشحن - طلب #{oid}","callback_data":f"ship:{oid}"}])
-        send(tmp["mid"], f"🔔 طلب جديد #{oid}\nالمنتج: {tmp['pname']}\nالسعر: {tmp['price']}ج\nالزبون:\n{txt}\n\nعند شحن الطلب دوس الزر:", kb_ship)
+        send(tmp["mid"], f"🔔 **طلب جديد تم تأكيده!** #{oid}\nالمنتج: {tmp['pname']}\nالسعر: {tmp['price']}ج\n\n👤 **بيانات الزبون كاملة:**\n{full_buyer_info}\n\nعند شحن الطلب وتسليمه للمندوب، اضغط الزر أدناه:", kb_ship)
         return
+
     if "photo" in m and st=="await_prod_photo":
         tmp["photo"] = m["photo"][-1]["file_id"]
         set_state(uid, "await_prod_name", tmp)
@@ -636,6 +652,40 @@ def handle_cb(c):
         edit(chat, mid, f"❌ رفض إشعار التحويل للمستخدم `{target_uid}`\nأرسل سبب الرفض الآن في الشات:", [])
         answer(c["id"], "أرسل سبب الرفض")
         return
+
+    # --- التعديل 3: التعامل مع رد التاجر على إمكانية التوصيل للموقع ---
+    if data.startswith("loc_ok:"):
+        buyer_uid = int(data.split(":")[1])
+        buyer_tmp = get_temp(buyer_uid)
+        buyer_state = get_state(buyer_uid)
+        
+        if buyer_state == "await_merchant_delivery":
+            set_state(buyer_uid, "await_cod_info", buyer_tmp)
+            try:
+                send(buyer_uid, "✅ **أخبرنا التاجر أن التوصيل متاح لموقعك!**\n\nلإكمال الطلب، الرجاء إرسال **اسمك كاملاً ورقم هاتفك** (أو رقمين للتواصل):", main_kb=True)
+            except: pass
+            edit(chat, mid, f"✅ قمت بتأكيد إمكانية التوصيل للموقع: {buyer_tmp.get('location', '')}\nننتظر الآن إرسال المشتري لبيانات التواصل الخاصة به لتأكيد الطلب.")
+        else:
+            edit(chat, mid, "عذراً، يبدو أن المشتري ألغى الطلب أو بدأ طلباً جديداً.")
+        answer(c["id"], "تم الموافقة على الموقع")
+        return
+
+    if data.startswith("loc_no:"):
+        buyer_uid = int(data.split(":")[1])
+        buyer_tmp = get_temp(buyer_uid)
+        buyer_state = get_state(buyer_uid)
+        
+        if buyer_state == "await_merchant_delivery":
+            set_state(buyer_uid, None, {})
+            try:
+                send(buyer_uid, f"❌ **عذراً!** أبلغنا التاجر أن التوصيل غير متاح إلى موقعك ({buyer_tmp.get('location', '')}). تم إلغاء الطلب، يمكنك تصفح منتجات أخرى.", main_kb=True)
+            except: pass
+            edit(chat, mid, f"❌ قمت برفض التوصيل للموقع: {buyer_tmp.get('location', '')}\nتم إبلاغ المشتري وإلغاء الطلب.")
+        else:
+            edit(chat, mid, "عذراً، يبدو أن المشتري ألغى الطلب مسبقاً.")
+        answer(c["id"], "تم الرفض")
+        return
+    # -------------------------------------------------------------
 
     if data=="search":
         set_state(uid, "await_search", {})
@@ -698,10 +748,7 @@ def handle_cb(c):
         edit(chat, mid, txt, [[{"text":"🔙 رجوع","callback_data":"admin_panel"}]])
         answer(c["id"])
         return
-    
-    # --- التعديل هنا: جلب وإرسال السيلفي في الطلبات المعلقة للإدارة ---
     if data=="admin_pending" and uid==ADMIN_ID:
-        # جلب الهوية والسيلفي
         pend = db.execute("SELECT user_id,store_name,phone,city,doc_photo,selfie_photo FROM merchants WHERE status='pending' LIMIT 5").fetchall()
         if not pend:
             edit(chat, mid, "لا يوجد طلبات معلقة", [[{"text":"🔙 رجوع","callback_data":"admin_panel"}]])
@@ -711,13 +758,10 @@ def handle_cb(c):
                 kb = []
                 kb.append([{"text":"✅ قبول","callback_data":f"m_ok:{m[0]}"}])
                 kb.append([{"text":"⏳ رفض مؤقت","callback_data":f"m_reject_temp:{m[0]}"},{"text":"🚫 رفض نهائي","callback_data":f"m_reject_perm:{m[0]}"}])
-                # إرسال البطاقة
                 if m[4]: send(chat, f"صورة الهوية للتاجر: {m[1]}", photo=m[4])
-                # إرسال السيلفي مع الأزرار
                 if m[5]: 
                     send(chat, f"🔔 سيلفي التاجر:\n{m[1]}\n{m[2]}\n{m[3]}\nID:{m[0]}", kb, photo=m[5])
                 else:
-                    # في حال كان في طلب قديم ما فيه سيلفي
                     send(chat, f"🔔 تاجر (بدون سيلفي):\n{m[1]}\n{m[2]}\n{m[3]}\nID:{m[0]}", kb)
         answer(c["id"])
         return
@@ -918,6 +962,8 @@ def handle_cb(c):
             edit(chat, mid, t, [[{"text":"🔙 رجوع","callback_data":"sales"}]])
         answer(c["id"])
         return
+
+    # --- التعديل 4: طلب الموقع من المشتري عند الضغط على شراء ---
     if data.startswith("buy:"):
         if check_debt_and_block(chat, uid):
             answer(c["id"], "عليك عمولة مستحقة")
@@ -929,99 +975,11 @@ def handle_cb(c):
             return
         base_price = p[9] if len(p) > 9 and p[9] else int(round(p[3] * 100 / (100 + COMMISSION_RATE)))
         comm = p[3] - base_price
-        set_state(uid, "await_cod_info", {"pid":p[0],"mid":p[1],"price":p[3],"pname":p[2],"commission":comm})
-        send(chat, f"اسم المنتج: {p[2]}\nسعر المنتج: {p[3]} جنيه\nالدفع بعد الاستلام\n\nأرسل اسمك كاملًا ورقمين للتواصل وموقعك بدقة:")
+        
+        set_state(uid, "await_location", {"pid":p[0],"mid":p[1],"price":p[3],"pname":p[2],"commission":comm})
+        send(chat, f"📦 المنتج: {p[2]}\n💰 السعر: {p[3]} جنيه\n\n📍 للتحقق من إمكانية التوصيل، **أرسل موقعك بدقة** (المدينة، الحي، أو وصف دقيق للمكان):")
         answer(c["id"])
         return
-    if data.startswith("m_ok:"):
-        mid_t = int(data.split(":")[1])
-        db.execute("UPDATE merchants SET status='approved', reject_reason='' WHERE user_id=?", (mid_t,))
-        db.commit()
-        edit(chat, mid, f"✅ تم قبول التاجر {mid_t}", [])
-        try:
-            send(mid_t, "🎉 تم قبول متجرك بعد مراجعة المستند.\nاستخدم /start لفتح لوحة التاجر وإضافة المنتجات ومتابعة الطلبات.", main_kb=True)
-        except:
-            pass
-        answer(c["id"])
-        return
-    if data.startswith("m_reject_temp:"):
-        target = int(data.split(":")[1])
-        set_state(uid, f"await_reject_reason_temp_m_{target}", {"review_message_id": mid})
-        edit(chat, mid, f"⏳ رفض مؤقت للتاجر {target}\nأرسل السبب:", [])
-        answer(c["id"])
-        return
-    if data.startswith("m_reject_perm:"):
-        target = int(data.split(":")[1])
-        set_state(uid, f"await_reject_reason_perm_m_{target}", {"review_message_id": mid})
-        edit(chat, mid, f"🚫 رفض نهائي للتاجر {target}\nأرسل السبب:", [])
-        answer(c["id"])
-        return
-    if data.startswith("m_no:"):
-        mid_t = int(data.split(":")[1])
-        db.execute("UPDATE merchants SET status='rejected_temp', reject_reason='رفض صامت' WHERE user_id=?", (mid_t,))
-        db.commit()
-        edit(chat, mid, f"🔇 تم إلغاء طلب التاجر {mid_t}.", [])
-        answer(c["id"])
-        return
-    if data.startswith("p_ok:"):
-        pid = int(data.split(":")[1])
-        db.execute("UPDATE products SET status='approved', reject_reason='' WHERE id=?", (pid,))
-        db.commit()
-        p = db.execute("SELECT * FROM products WHERE id=?", (pid,)).fetchone()
-        edit(chat, mid, f"✅ تم نشر {p[2] if p else pid}", [])
-        if p:
-            try:
-                send(p[1], f"✅ تم نشر منتجك {p[2]}", main_kb=True)
-            except:
-                pass
-        answer(c["id"])
-        return
-    if data.startswith("p_reject_temp:"):
-        target = int(data.split(":")[1])
-        set_state(uid, f"await_reject_reason_temp_p_{target}", {"review_message_id": mid})
-        edit(chat, mid, f"⏳ رفض مؤقت للمنتج {target}\nأرسل السبب:", [])
-        answer(c["id"])
-        return
-    if data.startswith("p_reject_perm:"):
-        target = int(data.split(":")[1])
-        set_state(uid, f"await_reject_reason_perm_p_{target}", {"review_message_id": mid})
-        edit(chat, mid, f"🚫 رفض نهائي للمنتج {target}\nأرسل السبب:", [])
-        answer(c["id"])
-        return
-    if data.startswith("p_no:"):
-        pid = int(data.split(":")[1])
-        db.execute("UPDATE products SET status='rejected_temp', reject_reason='كانسل' WHERE id=?", (pid,))
-        db.commit()
-        edit(chat, mid, f"🔇 تم إلغاء طلب المنتج {pid}.", [])
-        answer(c["id"])
-        return
-    if data=="home":
-        merchant_row = db.execute("SELECT status FROM merchants WHERE user_id=?", (uid,)).fetchone()
-        if merchant_row and merchant_row[0] in ["approved", "pending", "banned"]:
-            open_merchant(chat, uid, mid)
-        else:
-            edit(chat, mid, "مرحبا بك في سوق السودان\nهنا ستجد ما تريده إن شاء الله وبأقل الأسعار.", [])
-            send(chat, "مرحبا بك في سوق السودان\nهنا ستجد ما تريده إن شاء الله وبأقل الأسعار.", main_kb=True)
-        answer(c["id"])
-        return
+    # -------------------------------------------------------------
 
-def main():
-    keep_alive()
-    setup()
-    off = 0
-    print(f"Bot Started Successfully - Commission: {COMMISSION_RATE}%")
-    while True:
-        try:
-            r = api("getUpdates", {"timeout":30, "offset":off})
-            for u in r.get("result", []):
-                off = u["update_id"]+1
-                if "message" in u:
-                    handle_msg(u["message"])
-                elif "callback_query" in u:
-                    handle_cb(u["callback_query"])
-        except Exception as e:
-            print(e)
-            time.sleep(2)
-
-if __name__=="__main__":
-    main()
+    if 
