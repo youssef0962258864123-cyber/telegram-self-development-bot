@@ -981,5 +981,96 @@ def handle_cb(c):
         answer(c["id"])
         return
     # -------------------------------------------------------------
-    if __name__=="__main__":
+
+        if data.startswith("m_ok:"):
+        mid_t = int(data.split(":")[1])
+        db.execute("UPDATE merchants SET status='approved', reject_reason='' WHERE user_id=?", (mid_t,))
+        db.commit()
+        edit(chat, mid, f"✅ تم قبول التاجر {mid_t}", [])
+        try:
+            send(mid_t, "🎉 تم قبول متجرك بعد مراجعة المستند.\nاستخدم /start لفتح لوحة التاجر وإضافة المنتجات ومتابعة الطلبات.", main_kb=True)
+        except:
+            pass
+        answer(c["id"])
+        return
+    if data.startswith("m_reject_temp:"):
+        target = int(data.split(":")[1])
+        set_state(uid, f"await_reject_reason_temp_m_{target}", {"review_message_id": mid})
+        edit(chat, mid, f"⏳ رفض مؤقت للتاجر {target}\nأرسل السبب:", [])
+        answer(c["id"])
+        return
+    if data.startswith("m_reject_perm:"):
+        target = int(data.split(":")[1])
+        set_state(uid, f"await_reject_reason_perm_m_{target}", {"review_message_id": mid})
+        edit(chat, mid, f"🚫 رفض نهائي للتاجر {target}\nأرسل السبب:", [])
+        answer(c["id"])
+        return
+    if data.startswith("m_no:"):
+        mid_t = int(data.split(":")[1])
+        db.execute("UPDATE merchants SET status='rejected_temp', reject_reason='رفض صامت' WHERE user_id=?", (mid_t,))
+        db.commit()
+        edit(chat, mid, f"🔇 تم إلغاء طلب التاجر {mid_t}.", [])
+        answer(c["id"])
+        return
+    if data.startswith("p_ok:"):
+        pid = int(data.split(":")[1])
+        db.execute("UPDATE products SET status='approved', reject_reason='' WHERE id=?", (pid,))
+        db.commit()
+        p = db.execute("SELECT * FROM products WHERE id=?", (pid,)).fetchone()
+        edit(chat, mid, f"✅ تم نشر {p[2] if p else pid}", [])
+        if p:
+            try:
+                send(p[1], f"✅ تم نشر منتجك {p[2]}", main_kb=True)
+            except:
+                pass
+        answer(c["id"])
+        return
+    if data.startswith("p_reject_temp:"):
+        target = int(data.split(":")[1])
+        set_state(uid, f"await_reject_reason_temp_p_{target}", {"review_message_id": mid})
+        edit(chat, mid, f"⏳ رفض مؤقت للمنتج {target}\nأرسل السبب:", [])
+        answer(c["id"])
+        return
+    if data.startswith("p_reject_perm:"):
+        target = int(data.split(":")[1])
+        set_state(uid, f"await_reject_reason_perm_p_{target}", {"review_message_id": mid})
+        edit(chat, mid, f"🚫 رفض نهائي للمنتج {target}\nأرسل السبب:", [])
+        answer(c["id"])
+        return
+    if data.startswith("p_no:"):
+        pid = int(data.split(":")[1])
+        db.execute("UPDATE products SET status='rejected_temp', reject_reason='كانسل' WHERE id=?", (pid,))
+        db.commit()
+        edit(chat, mid, f"🔇 تم إلغاء طلب المنتج {pid}.", [])
+        answer(c["id"])
+        return
+    if data=="home":
+        merchant_row = db.execute("SELECT status FROM merchants WHERE user_id=?", (uid,)).fetchone()
+        if merchant_row and merchant_row[0] in ["approved", "pending", "banned"]:
+            open_merchant(chat, uid, mid)
+        else:
+            edit(chat, mid, "مرحبا بك في سوق السودان\nهنا ستجد ما تريده إن شاء الله وبأقل الأسعار.", [])
+            send(chat, "مرحبا بك في سوق السودان\nهنا ستجد ما تريده إن شاء الله وبأقل الأسعار.", main_kb=True)
+        answer(c["id"])
+        return
+
+def main():
+    keep_alive()
+    setup()
+    off = 0
+    print(f"Bot Started Successfully - Commission: {COMMISSION_RATE}%")
+    while True:
+        try:
+            r = api("getUpdates", {"timeout":30, "offset":off})
+            for u in r.get("result", []):
+                off = u["update_id"]+1
+                if "message" in u:
+                    handle_msg(u["message"])
+                elif "callback_query" in u:
+                    handle_cb(u["callback_query"])
+        except Exception as e:
+            print(e)
+            time.sleep(2)
+
+if __name__=="__main__":
     main()
