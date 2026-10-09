@@ -188,14 +188,6 @@ def check_user_subscription(user_id):
     except:
         return False
 
-def check_debt_and_block(chat_id, uid):
-    debt = get_user_debt(uid)
-    if debt > 0:
-        kb = [[{"text": "💳 دفع العمولة العليك", "callback_data": "pay_commission"}]]
-        send(chat_id, f"⚠️ **تنبيه:** لديك عمولة مستحقة قدرها ({debt} جنيه).\nلا يمكنك إجراء طلبات جديدة أو استلام طلبات حتى سداد العمولة.", kb, main_kb=True)
-        return True
-    return False
-
 def cat_kb(prefix):
     kb = []
     for i in range(0, len(CATEGORIES), 2):
@@ -350,7 +342,6 @@ def handle_msg(m):
         send(chat, "🚫 محظور، تواصل: "+ADMIN_CONTACT)
         return
 
-    # فحص الاشتراك الإجباري
     if not check_user_subscription(uid) and uid != ADMIN_ID:
         kb = [
             [{"text": "📢 اضغط هنا للانضمام للقناة", "url": "https://t.me/Sudan_Products_Group"}],
@@ -717,6 +708,17 @@ def handle_cb(c):
         edit(chat, mid, f"✅ تم تأكيد استلام العمولة وتصفير مديونية المستخدم `{target_uid}` بنجاح.", [])
         try:
             send(target_uid, "✅ **تم تأكيد استلام العمولة بنجاح!**\nتم رفع التقييد عن حسابك ويمكنك الآن استخدام كافة خدمات البوت بحرية.", main_kb=True)
+            
+            # إعادة إرسال زر الشحن المعلق للتاجر تلقائياً بعد دفع العمولة
+            target_tmp = get_temp(target_uid)
+            pending_oid = target_tmp.get("pending_ship_oid")
+            if pending_oid:
+                order_check = db.execute("SELECT id, price FROM orders WHERE id=? AND merchant_id=?", (pending_oid, target_uid)).fetchone()
+                if order_check:
+                    kb_ship = [[{"text": f"📦 تم الشحن - طلب #{order_check[0]}", "callback_data": f"ship:{order_check[0]}"}]]
+                    send(target_uid, f"📦 **بما أنك قمت بسداد العمولة، إليك زر شحن الطلب الذي كنت تحاول تنفيذه:**\n\nطلب رقم: #{order_check[0]}\nالمبلغ: {order_check[1]}ج", kb_ship)
+                target_tmp.pop("pending_ship_oid", None)
+                set_state(target_uid, None, target_tmp)
         except: pass
         answer(c["id"], "تم التأكيد")
         return
@@ -1012,15 +1014,26 @@ def handle_cb(c):
             edit(chat, mid, txt, kb)
         answer(c["id"])
         return
+
     if data.startswith("ship:"):
-        if check_debt_and_block(chat, uid):
-            answer(c["id"], "عليك عمولة مستحقة")
-            return
         oid = int(data.split(":")[1])
         order = db.execute("SELECT buyer_id,merchant_id,price FROM orders WHERE id=?", (oid,)).fetchone()
         if not order or order[1]!=uid:
             answer(c["id"], "ليس طلبك")
             return
+            
+        # فحص العمولة المستحقة قبل الشحن
+        debt = get_user_debt(uid)
+        if debt > 0:
+            tmp = get_temp(uid)
+            tmp["pending_ship_oid"] = oid
+            set_state(uid, None, tmp)
+            
+            kb = [[{"text": "💳 دفع العمولة الآن", "callback_data": "pay_commission"}]]
+            edit(chat, mid, f"⚠️ **عذراً، لديك عمولة مستحقة قدرها ({debt} جنيه).**\nلا يمكنك شحن الطلب #{oid} حتى سداد العمولة أولاً.", kb)
+            answer(c["id"], "عليك عمولة مستحقة")
+            return
+
         db.execute("UPDATE orders SET status='shipped' WHERE id=?", (oid,))
         db.commit()
         edit(chat, mid, f"✅ تم شحن #{oid}")
@@ -1031,6 +1044,7 @@ def handle_cb(c):
         send(buyer_id, f"📦 طلبك #{oid} تم شحنه! السعر {order[2]}ج عند الاستلام\nهل استلمت؟", kb_confirm)
         answer(c["id"], "تم الشحن")
         return
+
     if data.startswith("confirm:"):
         oid = int(data.split(":")[1])
         order = db.execute("SELECT buyer_id,merchant_id,price,commission,product_id FROM orders WHERE id=?", (oid,)).fetchone()
@@ -1166,9 +1180,6 @@ def handle_cb(c):
         answer(c["id"])
         return
     if data=="add":
-        if check_debt_and_block(chat, uid):
-            answer(c["id"], "عليك عمولة مستحقة")
-            return
         set_state(uid, "await_prod_photo", {})
         send(chat, "أرسل صورة المنتج:")
         answer(c["id"])
@@ -1201,9 +1212,6 @@ def handle_cb(c):
         return
 
     if data.startswith("buy:"):
-        if check_debt_and_block(chat, uid):
-            answer(c["id"], "عليك عمولة مستحقة")
-            return
         pid = int(data.split(":")[1])
         p = db.execute("SELECT * FROM products WHERE id=?", (pid,)).fetchone()
         if not p:
