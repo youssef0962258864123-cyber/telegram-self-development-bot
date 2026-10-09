@@ -43,7 +43,7 @@ db = sqlite3.connect(DB, check_same_thread=False)
 db.executescript('''
 CREATE TABLE IF NOT EXISTS users(user_id INTEGER PRIMARY KEY, state TEXT, temp TEXT, points INTEGER DEFAULT 0, purchases INTEGER DEFAULT 0, sales INTEGER DEFAULT 0, referred_by INTEGER, is_banned INTEGER DEFAULT 0, profit_active INTEGER DEFAULT 0, referral_earnings INTEGER DEFAULT 0, referral_balance INTEGER DEFAULT 0, unpaid_commission INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS merchants(user_id INTEGER PRIMARY KEY, store_name TEXT, phone TEXT, city TEXT, doc_photo TEXT, selfie_photo TEXT, status TEXT DEFAULT 'pending', reject_reason TEXT);
-CREATE TABLE IF NOT EXISTS products(id INTEGER PRIMARY KEY AUTOINCREMENT, merchant_id INTEGER, name TEXT, price INTEGER, photo_id TEXT, description TEXT, category TEXT, status TEXT DEFAULT 'pending', reject_reason TEXT, base_price INTEGER);
+CREATE TABLE IF NOT EXISTS products(id INTEGER PRIMARY KEY AUTOINCREMENT, merchant_id INTEGER, name TEXT, price INTEGER, photo_id TEXT, description TEXT, category TEXT, status TEXT DEFAULT 'pending', reject_reason TEXT, base_price INTEGER, quantity TEXT);
 CREATE TABLE IF NOT EXISTS orders(id INTEGER PRIMARY KEY AUTOINCREMENT, buyer_id INTEGER, product_id INTEGER, merchant_id INTEGER, price INTEGER, commission INTEGER, referral_comm INTEGER, buyer_info TEXT, status TEXT, created_at TEXT);
 CREATE TABLE IF NOT EXISTS referrals(id INTEGER PRIMARY KEY AUTOINCREMENT, referrer_id INTEGER, referred_id INTEGER, created_at TEXT);
 CREATE TABLE IF NOT EXISTS referral_profits(id INTEGER PRIMARY KEY AUTOINCREMENT, referrer_id INTEGER, buyer_id INTEGER, order_id INTEGER, amount INTEGER, created_at TEXT);
@@ -69,6 +69,8 @@ except: pass
 try: db.execute("ALTER TABLE products ADD COLUMN reject_reason TEXT")
 except: pass
 try: db.execute("ALTER TABLE products ADD COLUMN base_price INTEGER")
+except: pass
+try: db.execute("ALTER TABLE products ADD COLUMN quantity TEXT")
 except: pass
 try: db.execute("ALTER TABLE orders ADD COLUMN price INTEGER")
 except: pass
@@ -267,8 +269,9 @@ def do_search(chat_id, query):
     for product in prods:
         store = db.execute("SELECT store_name FROM merchants WHERE user_id=?", (product[1],)).fetchone()
         store_name = store[0] if store else "متجر"
+        q_text = f"\n📦 الكمية: {product[10]}" if len(product) > 10 and product[10] else ""
         kb = [[{"text": f"🛒 شراء {product[3]}ج عند الاستلام", "callback_data": f"buy:{product[0]}"}]]
-        send(chat_id, f"📦 {product[2]}\n💰 {product[3]}ج عند الاستلام\n📝 {product[5]}\n🏷️ {product[6]}\n🏪 {store_name}", kb, photo=product[4])
+        send(chat_id, f"📦 {product[2]}\n💰 {product[3]}ج عند الاستلام{q_text}\n📝 {product[5]}\n🏷️ {product[6]}\n🏪 {store_name}", kb, photo=product[4])
 
 def show_market(chat_id):
     keyboard = cat_kb("browse")
@@ -301,6 +304,7 @@ def open_merchant(chat_id, uid, message_id=None):
             text = f"أهلاً يا صاحب متجر {merchant[1]} ✅\nمنتجاتك: {product_count}\nطلبات قيد الشحن: {pending_orders}"
             keyboard = [
                 [{"text": "➕ إضافة منتج", "callback_data": "add"}, {"text": "📊 مبيعاتي", "callback_data": "sales"}],
+                [{"text": "📦 منتجاتي وإدارتها", "callback_data": "merchant_my_prods"}],
                 [{"text": f"📦 طلبات تحت الشحن ({pending_orders})", "callback_data": "my_pending"}],
                 [{"text": "🛍️ تصفح السوق", "callback_data": "buyer"}]
             ]
@@ -605,20 +609,44 @@ def handle_msg(m):
     if st=="await_prod_price_confirm":
         send(chat, "استخدم أزرار الموافقة أو الرفض الظاهرة أسفل رسالة السعر.")
         return
+    
+    if st=="await_prod_is_limited":
+        if txt not in ["نعم", "لا", "نعم 🟢", "لا 🔴"]:
+            kb = [[{"text": "نعم 🟢", "callback_data": "limited_yes"}, {"text": "لا 🔴", "callback_data": "limited_no"}]]
+            send(chat, "الرجاء استخدام الأزرار أدناه (نعم أو لا):", kb)
+            return
+        if "نعم" in txt:
+            tmp["is_limited"] = True
+            set_state(uid, "await_prod_quantity", tmp)
+            send(chat, "أرسل الكمية المتوفرة (مثلاً: 5 حبات، أو قطعتين):")
+        else:
+            tmp["is_limited"] = False
+            tmp["quantity"] = "غير محدود"
+            set_state(uid, "await_prod_desc", tmp)
+            send(chat, "أرسل وصف المنتج:")
+        return
+
+    if st=="await_prod_quantity":
+        tmp["quantity"] = txt
+        set_state(uid, "await_prod_desc", tmp)
+        send(chat, f"✅ تم تحديد الكمية: {txt}\n\nالآن أرسل وصف المنتج:")
+        return
+
     if st=="await_prod_desc":
         tmp["desc"] = txt
-        db.execute("INSERT INTO products(merchant_id,name,price,base_price,photo_id,description,category,status) VALUES(?,?,?,?,?,?,?,?)", (uid, tmp["name"], tmp["price"], tmp.get("base_price", tmp["price"]), tmp["photo"], tmp["desc"], tmp.get("cat","📦 أخرى"), "pending"))
+        quantity = tmp.get("quantity", "غير محدود")
+        db.execute("INSERT INTO products(merchant_id,name,price,base_price,photo_id,description,category,status,quantity) VALUES(?,?,?,?,?,?,?,?,?)", (uid, tmp["name"], tmp["price"], tmp.get("base_price", tmp["price"]), tmp["photo"], tmp["desc"], tmp.get("cat","📦 أخرى"), "pending", quantity))
         db.commit()
         pid = db.execute("SELECT last_insert_rowid()").fetchone()[0]
         set_state(uid, None, {})
         comm = tmp.get("commission", int(tmp["price"] * COMMISSION_RATE / 109))
-        send(chat, f"✅ تم رفع المنتج في {tmp.get('cat')}\nالسعر الأساسي: {tmp.get('base_price', tmp['price'])}ج\nعمولة المتجر: {comm}ج\nسعر البيع: {tmp['price']}ج\nبانتظار الموافقة.", main_kb=True)
+        send(chat, f"✅ تم رفع المنتج في {tmp.get('cat')}\nالسعر الأساسي: {tmp.get('base_price', tmp['price'])}ج\nالكمية: {quantity}\nعمولة المتجر: {comm}ج\nسعر البيع: {tmp['price']}ج\nبانتظار الموافقة.", main_kb=True)
         kb = []
         kb.append([{"text":"✅ قبول","callback_data":f"p_ok:{pid}"}])
         kb.append([{"text":"⏳ رفض مؤقت","callback_data":f"p_reject_temp:{pid}"},{"text":"🚫 رفض نهائي","callback_data":f"p_reject_perm:{pid}"}])
         kb.append([{"text":"🔇 كانسل","callback_data":f"p_no:{pid}"}])
         if ADMIN_ID:
-            send(ADMIN_ID, f"🔔 منتج جديد:\n{tmp['name']} - {tmp['price']}ج\nعمولة {comm}ج", kb, photo=tmp["photo"])
+            send(ADMIN_ID, f"🔔 منتج جديد:\n{tmp['name']} - {tmp['price']}ج\nالكمية: {quantity}\nعمولة {comm}ج", kb, photo=tmp["photo"])
         return
 
     if st == "await_location":
@@ -852,7 +880,6 @@ def handle_cb(c):
         
         answer(c["id"], "✅ تم حذف المنتج بنجاح!")
         
-        # تحديث القائمة بعد الحذف
         prods = db.execute("SELECT id, name, price, status FROM products WHERE merchant_id=?", (merch_uid,)).fetchall()
         if not prods:
             edit(chat, mid, "تم حذف المنتج. لم يتبق أي منتج لهذا التاجر.", [[{"text": "🔙 رجوع لملف التاجر", "callback_data": f"admin_merch_view:{merch_uid}"}]])
@@ -865,6 +892,47 @@ def handle_cb(c):
                 ])
             kb.append([{"text": "🔙 رجوع لملف التاجر", "callback_data": f"admin_merch_view:{merch_uid}"}])
             edit(chat, mid, f"✅ تم الحذف بنجاح.\n📦 **منتجات التاجر المتبقية:**", kb)
+        return
+
+    if data=="merchant_my_prods":
+        prods = db.execute("SELECT id, name, price, status, quantity FROM products WHERE merchant_id=?", (uid,)).fetchall()
+        if not prods:
+            edit(chat, mid, "📦 ليس لديك أي منتجات مرفوعة حالياً.", [[{"text": "🔙 رجوع للوحة المتجر", "callback_data": "home"}]])
+        else:
+            kb = []
+            for p in prods:
+                kb.append([
+                    {"text": f"📦 {p[1]} ({p[2]}ج) | كمية: {p[4] or 'غير محدود'}", "callback_data": "none"},
+                    {"text": "🗑️ حذف", "callback_data": f"merchant_del_prod:{p[0]}"}
+                ])
+            kb.append([{"text": "🔙 رجوع للوحة المتجر", "callback_data": "home"}])
+            edit(chat, mid, "📦 **منتجات متجرك:**\nيمكنك حذف أي منتج فوراً إذا نفد:", kb)
+        answer(c["id"])
+        return
+
+    if data.startswith("merchant_del_prod:"):
+        pid = int(data.split(":")[1])
+        prod = db.execute("SELECT merchant_id FROM products WHERE id=?", (pid,)).fetchone()
+        if not prod or prod[0] != uid:
+            answer(c["id"], "هذا ليس منتجك!")
+            return
+        
+        db.execute("DELETE FROM products WHERE id=?", (pid,))
+        db.commit()
+        answer(c["id"], "✅ تم حذف المنتج بنجاح!")
+        
+        prods = db.execute("SELECT id, name, price, status, quantity FROM products WHERE merchant_id=?", (uid,)).fetchall()
+        if not prods:
+            edit(chat, mid, "📦 تم حذف المنتج. لم يتبق أي منتج في متجرك.", [[{"text": "🔙 رجوع للوحة المتجر", "callback_data": "home"}]])
+        else:
+            kb = []
+            for p in prods:
+                kb.append([
+                    {"text": f"📦 {p[1]} ({p[2]}ج) | كمية: {p[4] or 'غير محدود'}", "callback_data": "none"},
+                    {"text": "🗑️ حذف", "callback_data": f"merchant_del_prod:{p[0]}"}
+                ])
+            kb.append([{"text": "🔙 رجوع للوحة المتجر", "callback_data": "home"}])
+            edit(chat, mid, "✅ تم الحذف.\n📦 **منتجات متجرك المتبقية:**", kb)
         return
 
     if data=="admin_profits" and uid==ADMIN_ID:
@@ -1025,9 +1093,10 @@ def handle_cb(c):
             for p in prods:
                 store = db.execute("SELECT store_name FROM merchants WHERE user_id=?", (p[1],)).fetchone()
                 sname = store[0] if store else "متجر"
+                q_text = f"\n📦 الكمية: {p[10]}" if len(p) > 10 and p[10] else ""
                 kb = []
                 kb.append([{"text":f"🛒 شراء {p[3]}ج عند الاستلام","callback_data":f"buy:{p[0]}"}])
-                send(chat, f"📦 {p[2]}\n💰 {p[3]}ج عند الاستلام\n📝 {p[5]}\n🏷️ {p[6]}\n🏪 {sname}", kb, photo=p[4])
+                send(chat, f"📦 {p[2]}\n💰 {p[3]}ج عند الاستلام{q_text}\n📝 {p[5]}\n🏷️ {p[6]}\n🏪 {sname}", kb, photo=p[4])
         answer(c["id"])
         return
     if data=="merchant":
@@ -1039,9 +1108,27 @@ def handle_cb(c):
             answer(c["id"], "انتهت جلسة التسعير أو تم التعامل معها مسبقاً")
             return
         tmp = get_temp(uid)
-        set_state(uid, "await_prod_cat", tmp)
-        edit(chat, mid, f"✅ تم اعتماد السعر النهائي {tmp['price']}ج\nاختر قسم المنتج:", cat_kb("setcat"))
+        set_state(uid, "await_prod_is_limited", tmp)
+        kb = [
+            [{"text": "نعم 🟢", "callback_data": "limited_yes"}, {"text": "لا 🔴", "callback_data": "limited_no"}]
+        ]
+        edit(chat, mid, f"✅ تم اعتماد السعر {tmp['price']}ج\n\nهل المنتج محدود الكمية؟", kb)
         answer(c["id"], "تم اعتماد السعر")
+        return
+
+    if data=="limited_yes":
+        tmp = get_temp(uid)
+        set_state(uid, "await_prod_quantity", tmp)
+        edit(chat, mid, "أرسل الكمية المتوفرة (مثلاً: 3 حبات، أو قطعتين):")
+        answer(c["id"])
+        return
+
+    if data=="limited_no":
+        tmp = get_temp(uid)
+        tmp["quantity"] = "غير محدود"
+        set_state(uid, "await_prod_desc", tmp)
+        edit(chat, mid, "تم تعيين الكمية: غير محدود ✅\n\nأرسل وصف المنتج:")
+        answer(c["id"])
         return
 
     if data=="prod_price_cancel":
@@ -1151,12 +1238,13 @@ def handle_cb(c):
         p = db.execute("SELECT * FROM products WHERE id=?", (pid,)).fetchone()
         edit(chat, mid, f"✅ تم نشر {p[2] if p else pid}", [])
         
-        # نشر المنتج تلقائياً في القناة
+        # نشر المنتج تلقائياً في القناة مع الكمية إن وجدت
         if p and REQUIRED_CHANNEL:
             store = db.execute("SELECT store_name FROM merchants WHERE user_id=?", (p[1],)).fetchone()
             sname = store[0] if store else "متجر"
+            q_text = f"\n📦 الكمية: {p[10]}" if len(p) > 10 and p[10] else ""
             kb_channel = [[{"text": f"🛒 شراء المنتج ({p[3]}ج)", "url": f"https://t.me/{BOT_USERNAME}?start=buy_{p[0]}"}]]
-            send(REQUIRED_CHANNEL, f"🔥 **منتج جديد في سوق السودان!**\n\n📦 {p[2]}\n💰 السعر: {p[3]} جنيه\n📝 الوصف: {p[5]}\n🏷️ القسم: {p[6]}\n🏪 البائع: {sname}", kb_channel, photo=p[4])
+            send(REQUIRED_CHANNEL, f"🔥 **منتج جديد في سوق السودان!**\n\n📦 {p[2]}\n💰 السعر: {p[3]} جنيه{q_text}\n📝 الوصف: {p[5]}\n🏷️ القسم: {p[6]}\n🏪 البائع: {sname}", kb_channel, photo=p[4])
 
         if p:
             try:
