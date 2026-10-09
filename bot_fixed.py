@@ -28,9 +28,9 @@ def keep_alive():
 # --- إعدادات البوت وقاعدة البيانات ---
 TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
-BOT_USERNAME = "Develop_yourself_bot"  # معرف البوت المباشر
+BOT_USERNAME = "Develop_yourself_bot"
 ADMIN_CONTACT = "@admin"
-REQUIRED_CHANNEL = "-1004311192683"  # معرف قناة النشر والاشتراك الإجباري
+REQUIRED_CHANNEL = "-1004311192683"
 COMMISSION_RATE = 9
 REFERRAL_RATE = 4
 API = f"https://api.telegram.org/bot{TOKEN}"
@@ -618,7 +618,7 @@ def handle_msg(m):
         if "نعم" in txt:
             tmp["is_limited"] = True
             set_state(uid, "await_prod_quantity", tmp)
-            send(chat, "أرسل الكمية المتوفرة (مثلاً: 5 حبات، أو قطعتين):")
+            send(chat, "أرسل الكمية المتوفرة (أرقام فقط، مثلاً: 5 أو 10):")
         else:
             tmp["is_limited"] = False
             tmp["quantity"] = "غير محدود"
@@ -627,6 +627,9 @@ def handle_msg(m):
         return
 
     if st=="await_prod_quantity":
+        if not txt.isdigit() or int(txt) <= 0:
+            send(chat, "❌ يرجى إرسال الكمية أرقام صحيحة فقط (مثلاً: 5):")
+            return
         tmp["quantity"] = txt
         set_state(uid, "await_prod_desc", tmp)
         send(chat, f"✅ تم تحديد الكمية: {txt}\n\nالآن أرسل وصف المنتج:")
@@ -887,7 +890,7 @@ def handle_cb(c):
             kb = []
             for p in prods:
                 kb.append([
-                    {"text": f"📦 {p[1]} ({p[2]}ج) [{p[3]}]", "callback_data": "none"},
+                    {"text": f"📦 {p[1]} ({p[2]}ج) [{p[3]}]", "callback_data": f"none"},
                     {"text": "🗑️ حذف", "callback_data": f"admin_del_prod:{p[0]}:{merch_uid}"}
                 ])
             kb.append([{"text": "🔙 رجوع لملف التاجر", "callback_data": f"admin_merch_view:{merch_uid}"}])
@@ -1030,7 +1033,7 @@ def handle_cb(c):
         return
     if data.startswith("confirm:"):
         oid = int(data.split(":")[1])
-        order = db.execute("SELECT buyer_id,merchant_id,price,commission FROM orders WHERE id=?", (oid,)).fetchone()
+        order = db.execute("SELECT buyer_id,merchant_id,price,commission,product_id FROM orders WHERE id=?", (oid,)).fetchone()
         if not order or order[0]!=uid:
             answer(c["id"], "ليس طلبك")
             return
@@ -1038,6 +1041,20 @@ def handle_cb(c):
         merchant_id = order[1]
         price = order[2]
         comm_amount = order[3]
+        product_id = order[4]
+
+        # خصم الكمية من المنتج عند تأكيد الاستلام
+        prod_data = db.execute("SELECT quantity FROM products WHERE id=?", (product_id,)).fetchone()
+        if prod_data and prod_data[0] and prod_data[0] != "غير محدود":
+            try:
+                curr_qty = int(prod_data[0])
+                new_qty = curr_qty - 1
+                if new_qty <= 0:
+                    db.execute("DELETE FROM products WHERE id=?", (product_id,))
+                else:
+                    db.execute("UPDATE products SET quantity=? WHERE id=?", (str(new_qty), product_id))
+            except:
+                pass
 
         ref_row = db.execute("SELECT referred_by FROM users WHERE user_id=?", (buyer_id,)).fetchone()
         referral_amount = 0
@@ -1056,7 +1073,7 @@ def handle_cb(c):
         db.execute("UPDATE users SET sales=sales+1, unpaid_commission=unpaid_commission+? WHERE user_id=?", (comm_amount, merchant_id))
         db.commit()
         edit(chat, mid, f"✅ تم تأكيد استلام #{oid}")
-        send(merchant_id, f"🎉 المشتري أكد استلام #{oid}\nالسعر {price}ج\nعمولة البوت {comm_amount}ج ({COMMISSION_RATE}%)\n⚠️ تم تسجيل العمولة على حسابك.", main_kb=True)
+        send(merchant_id, f"🎉 المشتري أكد استلام #{oid}\nالسعر {price}ج\nعمولة البوت {comm_amount}ج ({COMMISSION_RATE}%)\n⚠️ تم تسجيل العمولة على حسابك، وتم خصم قطعة من كمية المنتج.", main_kb=True)
         if ADMIN_ID:
             send(ADMIN_ID, f"💰 مكتمل #{oid} السعر {price}ج عمولة {comm_amount}ج إحالة {referral_amount}ج")
         answer(c["id"], "تم التأكيد")
@@ -1119,7 +1136,7 @@ def handle_cb(c):
     if data=="limited_yes":
         tmp = get_temp(uid)
         set_state(uid, "await_prod_quantity", tmp)
-        edit(chat, mid, "أرسل الكمية المتوفرة (مثلاً: 3 حبات، أو قطعتين):")
+        edit(chat, mid, "أرسل الكمية المتوفرة (أرقام فقط، مثلاً: 5 أو 10):")
         answer(c["id"])
         return
 
@@ -1238,7 +1255,6 @@ def handle_cb(c):
         p = db.execute("SELECT * FROM products WHERE id=?", (pid,)).fetchone()
         edit(chat, mid, f"✅ تم نشر {p[2] if p else pid}", [])
         
-        # نشر المنتج تلقائياً في القناة مع الكمية إن وجدت
         if p and REQUIRED_CHANNEL:
             store = db.execute("SELECT store_name FROM merchants WHERE user_id=?", (p[1],)).fetchone()
             sname = store[0] if store else "متجر"
