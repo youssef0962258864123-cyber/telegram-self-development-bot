@@ -347,7 +347,7 @@ def handle_msg(m):
     # فحص الاشتراك الإجباري
     if not check_user_subscription(uid) and uid != ADMIN_ID:
         kb = [
-            [{"text": "📢 اضغط هنا للانضمام للقناة", "url": "https://t.me/+-1004311192683"}], # استبدل الرابط برابط قناتك العام أو دعوة خاصة
+            [{"text": "📢 اضغط هنا للانضمام للقناة", "url": "https://t.me/Sudan_Products_Group"}],
             [{"text": "🔄 تحقق من الاشتراك", "callback_data": "check_sub"}]
         ]
         send(chat, "⚠️ **عذراً، يجب عليك الاشتراك في قناة السوق أولاً لتتمكن من استخدام البوت واستعراض المنتجات!**\n\nانضم للقناة ثم اضغط زر التحقق أدناه:", kb)
@@ -791,7 +791,7 @@ def handle_cb(c):
     if data=="admin_orders" and uid==ADMIN_ID:
         rows = db.execute("SELECT o.id, o.price, o.status, o.created_at, p.name FROM orders o LEFT JOIN products p ON p.id=o.product_id ORDER BY o.id DESC LIMIT 10").fetchall()
         if not rows:
-            edit(chat, mid, "🧾 لا توجد طلبات محفوظة حتى الآن.", [[{"text":"🔙 لوحة الأدمن","callback_data":"admin_orders"}]])
+            edit(chat, mid, "🧾 لا توجد طلبات محفوظة حتى الآن.", [[{"text":"🔙 لوحة الأدمن","callback_data":"admin_panel"}]])
         else:
             lines = ["🧾 آخر طلبات العملاء المحفوظة (حتى 10):"]
             keyboard = []
@@ -799,7 +799,7 @@ def handle_cb(c):
                 product_name = row[4] or "منتج محذوف/غير متاح"
                 lines.append(f"#{row[0]} — {product_name[:30]} — {row[1]}ج — {row[2]} — {row[3] or ''}")
                 keyboard.append([{"text": f"تفاصيل الطلب #{row[0]}", "callback_data": f"admin_order:{row[0]}"}])
-            keyboard.append([{"text":"🔙 لوحة الأدمن","callback_data":"admin_orders"}])
+            keyboard.append([{"text":"🔙 لوحة الأدمن","callback_data":"admin_panel"}])
             edit(chat, mid, "\n".join(lines), keyboard)
         answer(c["id"])
         return
