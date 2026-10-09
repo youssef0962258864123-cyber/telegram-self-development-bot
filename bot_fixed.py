@@ -767,8 +767,8 @@ def handle_cb(c):
         total_orders = db.execute("SELECT COUNT(*) FROM orders").fetchone()[0]
         kb = []
         kb.append([{"text":f"👥 المستخدمين ({total_users})","callback_data":"admin_users"}])
-        kb.append([{"text":f"🏪 التجار ({total_merch})","callback_data":"admin_merchants"}])
-        kb.append([{"text":f"⏳ معلق ({pending_m})","callback_data":"admin_pending"}])
+        kb.append([{"text":f"🏪 التجار المقبولين ({total_merch})","callback_data":"admin_merchants"}])
+        kb.append([{"text":f"⏳ طلبات التجار المعلقة ({pending_m})","callback_data":"admin_pending"}])
         kb.append([{"text":f"💰 أرباح العمولة {total_comm}ج","callback_data":"admin_profits"}])
         kb.append([{"text":f"💸 أرباح الإحالات {total_ref_profits}ج","callback_data":"admin_ref_profits"}])
         kb.append([{"text":f"🧾 طلبات العملاء ({total_orders})","callback_data":"admin_orders"}])
@@ -776,6 +776,97 @@ def handle_cb(c):
         edit(chat, mid, f"👑 لوحة الأدمن\n\n👥 {total_users}\n🏪 {total_merch}\n⏳ {pending_m}\n💰 عمولة {COMMISSION_RATE}%: {total_comm}ج\n💸 إحالات {REFERRAL_RATE}%: {total_ref_profits}ج\nصافي لك: {total_comm - total_ref_profits}ج", kb)
         answer(c["id"])
         return
+
+    if data=="admin_merchants" and uid==ADMIN_ID:
+        merchants = db.execute("SELECT user_id, store_name, city FROM merchants WHERE status='approved'").fetchall()
+        if not merchants:
+            edit(chat, mid, "لا توجد متاجر مقبولة حتى الآن.", [[{"text":"🔙 لوحة الأدمن","callback_data":"admin_panel"}]])
+        else:
+            kb = []
+            for m in merchants:
+                kb.append([{"text": f"🏪 {m[1]} ({m[2]})", "callback_data": f"admin_merch_view:{m[0]}"}])
+            kb.append([{"text":"🔙 لوحة الأدمن","callback_data":"admin_panel"}])
+            edit(chat, mid, "🏪 **قائمة التجار المقبولين:**\nاضغط على أي تاجر لعرض ملفه الشخصي، منتجاته، وعدد معاملاته:", kb)
+        answer(c["id"])
+        return
+
+    if data.startswith("admin_merch_view:") and uid==ADMIN_ID:
+        merch_uid = int(data.split(":")[1])
+        m = db.execute("SELECT user_id, store_name, phone, city, doc_photo, selfie_photo FROM merchants WHERE user_id=?", (merch_uid,)).fetchone()
+        if not m:
+            answer(c["id"], "التاجر غير موجود")
+            return
+        
+        prod_count = db.execute("SELECT COUNT(*) FROM products WHERE merchant_id=?", (merch_uid,)).fetchone()[0]
+        order_count = db.execute("SELECT COUNT(*) FROM orders WHERE merchant_id=? AND status='completed'", (merch_uid,)).fetchone()[0]
+        unpaid_debt = get_user_debt(merch_uid)
+        
+        info_text = (
+            f"🏪 **ملف التاجر:**\n\n"
+            f"• **اسم المتجر:** {m[1]}\n"
+            f"• **رقم الآي دي:** `{m[0]}`\n"
+            f"• **الهاتف (واتساب):** {m[2]}\n"
+            f"• **المدينة:** {m[3]}\n"
+            f"• **عدد المنتجات:** {prod_count}\n"
+            f"• **المعاملات المكتملة:** {order_count}\n"
+            f"• **العمولة المستحقة عليه:** {unpaid_debt}ج"
+        )
+        
+        kb = [
+            [{"text": f"📦 استعراض منتجاته ({prod_count})", "callback_data": f"admin_merch_prods:{merch_uid}"}],
+            [{"text": "🔙 قائمة التجار", "callback_data": "admin_merchants"}]
+        ]
+        
+        edit(chat, mid, info_text, kb)
+        if m[4]:
+            send(chat, f"📄 مستند هوية التاجر: {m[1]}", photo=m[4])
+        if m[5]:
+            send(chat, f"📸 صورة سيلفي التاجر مع الهوية: {m[1]}", photo=m[5])
+        answer(c["id"])
+        return
+
+    if data.startswith("admin_merch_prods:") and uid==ADMIN_ID:
+        merch_uid = int(data.split(":")[1])
+        prods = db.execute("SELECT id, name, price, status FROM products WHERE merchant_id=?", (merch_uid,)).fetchall()
+        if not prods:
+            edit(chat, mid, "هذا التاجر ليس لديه أي منتجات.", [[{"text": "🔙 رجوع لملف التاجر", "callback_data": f"admin_merch_view:{merch_uid}"}]])
+        else:
+            kb = []
+            for p in prods:
+                kb.append([
+                    {"text": f"📦 {p[1]} ({p[2]}ج) [{p[3]}]", "callback_data": f"none"},
+                    {"text": "🗑️ حذف", "callback_data": f"admin_del_prod:{p[0]}:{merch_uid}"}
+                ])
+            kb.append([{"text": "🔙 رجوع لملف التاجر", "callback_data": f"admin_merch_view:{merch_uid}"}])
+            edit(chat, mid, f"📦 **منتجات التاجر (إجمالي: {len(prods)}):**\nيمكنك حذف أي منتج مباشرة بالضغط على زر الحذف بجانبه:", kb)
+        answer(c["id"])
+        return
+
+    if data.startswith("admin_del_prod:") and uid==ADMIN_ID:
+        parts = data.split(":")
+        pid = int(parts[1])
+        merch_uid = int(parts[2])
+        
+        db.execute("DELETE FROM products WHERE id=?", (pid,))
+        db.commit()
+        
+        answer(c["id"], "✅ تم حذف المنتج بنجاح!")
+        
+        # تحديث القائمة بعد الحذف
+        prods = db.execute("SELECT id, name, price, status FROM products WHERE merchant_id=?", (merch_uid,)).fetchall()
+        if not prods:
+            edit(chat, mid, "تم حذف المنتج. لم يتبق أي منتج لهذا التاجر.", [[{"text": "🔙 رجوع لملف التاجر", "callback_data": f"admin_merch_view:{merch_uid}"}]])
+        else:
+            kb = []
+            for p in prods:
+                kb.append([
+                    {"text": f"📦 {p[1]} ({p[2]}ج) [{p[3]}]", "callback_data": "none"},
+                    {"text": "🗑️ حذف", "callback_data": f"admin_del_prod:{p[0]}:{merch_uid}"}
+                ])
+            kb.append([{"text": "🔙 رجوع لملف التاجر", "callback_data": f"admin_merch_view:{merch_uid}"}])
+            edit(chat, mid, f"✅ تم الحذف بنجاح.\n📦 **منتجات التاجر المتبقية:**", kb)
+        return
+
     if data=="admin_profits" and uid==ADMIN_ID:
         total = db.execute("SELECT SUM(commission) FROM orders WHERE status='completed'").fetchone()[0] or 0
         edit(chat, mid, f"💰 أرباح العمولة {COMMISSION_RATE}%: {total}ج", [[{"text":"🔙 رجوع","callback_data":"admin_panel"}]])
