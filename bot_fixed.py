@@ -28,7 +28,7 @@ def keep_alive():
 # --- إعدادات البوت وقاعدة البيانات ---
 TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
-BOT_USERNAME = os.environ.get("BOT_USERNAME", "your_bot")
+BOT_USERNAME = "Develop_yourself_bot"
 ADMIN_CONTACT = os.environ.get("ADMIN_CONTACT", "@admin")
 REQUIRED_CHANNEL = "-1004311192683"  # معرف قناة النشر والاشتراك الإجباري
 COMMISSION_RATE = 9
