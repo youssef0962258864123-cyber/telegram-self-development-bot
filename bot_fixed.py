@@ -666,7 +666,7 @@ def handle_msg(m):
         db.commit()
         set_state(uid, None, {})
         
-        send(chat, f"✅ تم تأكيد وتسجيل طلبك #{oid} بنجاح!\nالمنتج: {tmp['pname']}\nالسعر: {tmp['price']}ج\n(الدفع عند الاستلام)\n\nسيتواصل التاجر معك قريباً لترتيب التسليم.", main_kb=True)
+        send(chat, f"✅ تم تأكيد وتسجيل طلبك #{oid} بنجاح!\nالمنتج: {tmp['pname']}\nالسعر: {tmp['price']}ج\n(الدفع عند الاست الاستلام)\n\nسيتواصل التاجر معك قريباً لترتيب التسليم.", main_kb=True)
         
         kb_ship = []
         kb_ship.append([{"text":f"📦 تم الشحن - طلب #{oid}","callback_data":f"ship:{oid}"}])
@@ -1153,6 +1153,7 @@ def handle_cb(c):
         if get_state(uid) != "await_prod_price_confirm":
             answer(c["id"], "انتهت جلسة التسعير أو تم التعامل معها مسبقاً")
             return
+        tmp = get_temp(uid)
         set_state(uid, "await_prod_price", tmp)
         edit(chat, mid, "❌ تم إلغاء السعر. أرسل السعر الأساسي الجديد أرقام فقط من غير عمولة المتجر:")
         answer(c["id"], "أرسل السعر الجديد")
