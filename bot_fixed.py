@@ -38,15 +38,18 @@ DB = "marketplace.db"
 CATEGORIES = ["👕 ملابس", "🍳 أواني منزلية", "🔥 عروض وخصم", "⭐ رائج", "👗 موضة", "📦 أخرى", "🌾 أعلاف حيوانات", "💄 منتجات تجميل", "🌱 أسمدة زراعية", "💪 منتجات جيم"]
 
 db = sqlite3.connect(DB, check_same_thread=False)
+
+# تم التعديل هنا: إضافة selfie_photo لجدول التجار
 db.executescript('''
 CREATE TABLE IF NOT EXISTS users(user_id INTEGER PRIMARY KEY, state TEXT, temp TEXT, points INTEGER DEFAULT 0, purchases INTEGER DEFAULT 0, sales INTEGER DEFAULT 0, referred_by INTEGER, is_banned INTEGER DEFAULT 0, profit_active INTEGER DEFAULT 0, referral_earnings INTEGER DEFAULT 0, referral_balance INTEGER DEFAULT 0, unpaid_commission INTEGER DEFAULT 0);
-CREATE TABLE IF NOT EXISTS merchants(user_id INTEGER PRIMARY KEY, store_name TEXT, phone TEXT, city TEXT, doc_photo TEXT, status TEXT DEFAULT 'pending', reject_reason TEXT);
+CREATE TABLE IF NOT EXISTS merchants(user_id INTEGER PRIMARY KEY, store_name TEXT, phone TEXT, city TEXT, doc_photo TEXT, selfie_photo TEXT, status TEXT DEFAULT 'pending', reject_reason TEXT);
 CREATE TABLE IF NOT EXISTS products(id INTEGER PRIMARY KEY AUTOINCREMENT, merchant_id INTEGER, name TEXT, price INTEGER, photo_id TEXT, description TEXT, category TEXT, status TEXT DEFAULT 'pending', reject_reason TEXT, base_price INTEGER);
 CREATE TABLE IF NOT EXISTS orders(id INTEGER PRIMARY KEY AUTOINCREMENT, buyer_id INTEGER, product_id INTEGER, merchant_id INTEGER, price INTEGER, commission INTEGER, referral_comm INTEGER, buyer_info TEXT, status TEXT, created_at TEXT);
 CREATE TABLE IF NOT EXISTS referrals(id INTEGER PRIMARY KEY AUTOINCREMENT, referrer_id INTEGER, referred_id INTEGER, created_at TEXT);
 CREATE TABLE IF NOT EXISTS referral_profits(id INTEGER PRIMARY KEY AUTOINCREMENT, referrer_id INTEGER, buyer_id INTEGER, order_id INTEGER, amount INTEGER, created_at TEXT);
 ''')
 
+# تحديثات الجداول لو الكود شغال من قبل
 try: db.execute("ALTER TABLE users ADD COLUMN profit_active INTEGER DEFAULT 0")
 except: pass
 try: db.execute("ALTER TABLE users ADD COLUMN referral_earnings INTEGER DEFAULT 0")
@@ -58,6 +61,9 @@ except: pass
 try: db.execute("ALTER TABLE users ADD COLUMN unpaid_commission INTEGER DEFAULT 0")
 except: pass
 try: db.execute("ALTER TABLE merchants ADD COLUMN doc_photo TEXT")
+except: pass
+# إضافة عمود السيلفي في حال كانت القاعدة القديمة موجودة
+try: db.execute("ALTER TABLE merchants ADD COLUMN selfie_photo TEXT")
 except: pass
 try: db.execute("ALTER TABLE merchants ADD COLUMN reject_reason TEXT")
 except: pass
@@ -270,7 +276,7 @@ def open_merchant(chat_id, uid, message_id=None):
     set_state(uid, None, {})
     merchant = db.execute("SELECT * FROM merchants WHERE user_id=?", (uid,)).fetchone()
     if merchant:
-        status = merchant[5] if len(merchant) >= 6 else "pending"
+        status = merchant[6] if len(merchant) >= 7 else merchant[5] # التعديل بسبب إضافة عمود جديد
         if status == "banned":
             text, keyboard = "🚫 حساب التاجر موقوف. تواصل مع خدمة العملاء.", None
         elif status == "pending":
@@ -482,23 +488,41 @@ def handle_msg(m):
         set_state(uid, "await_doc", tmp)
         send(chat, f"✅ استلمنا مدينتك: {txt}\n\nأرسل صورة واضحة لمستند الهوية (بطاقة شخصية أو جواز سفر أو رخصة). أرسل صورة فقط.")
         return
+    
+    # --- التعديل هنا: بعد المستند نطلب السيلفي ---
     if st=="await_doc":
         if "photo" not in m:
             send(chat, "❌ أرسل صورة المستند، ليس نص:")
             return
         doc_id = m["photo"][-1]["file_id"]
         tmp["doc"] = doc_id
-        db.execute("INSERT OR REPLACE INTO merchants(user_id, store_name, phone, city, doc_photo, status) VALUES(?,?,?,?,?,?)", (uid, tmp["store_name"], tmp["phone"], tmp["city"], doc_id, "pending"))
+        set_state(uid, "await_selfie", tmp)
+        send(chat, "✅ تم استلام صورة الهوية.\n\nالخطوة الأخيرة: أرسل صورة (سيلفي) لك وأنت تحمل هويتك بجوار وجهك لتأكيد هويتك. أرسل صورة فقط.")
+        return
+
+    # --- التعديل هنا: استلام السيلفي وحفظ الطلب ---
+    if st=="await_selfie":
+        if "photo" not in m:
+            send(chat, "❌ أرسل صورة السيلفي مع الهوية، وليس نص:")
+            return
+        selfie_id = m["photo"][-1]["file_id"]
+        doc_id = tmp["doc"]
+        db.execute("INSERT OR REPLACE INTO merchants(user_id, store_name, phone, city, doc_photo, selfie_photo, status) VALUES(?,?,?,?,?,?,?)", (uid, tmp["store_name"], tmp["phone"], tmp["city"], doc_id, selfie_id, "pending"))
         db.commit()
         set_state(uid, None, {})
-        send(chat, f"✅ تم استلام طلبك مع المستند\nمتجر: {tmp['store_name']}\nقيد المراجعة ⏳", main_kb=True)
-        kb = []
-        kb.append([{"text":"✅ قبول","callback_data":f"m_ok:{uid}"}])
-        kb.append([{"text":"⏳ رفض مؤقت","callback_data":f"m_reject_temp:{uid}"},{"text":"🚫 رفض نهائي","callback_data":f"m_reject_perm:{uid}"}])
-        kb.append([{"text":"🔇 كانسل","callback_data":f"m_no:{uid}"}])
+        send(chat, f"✅ تم استلام طلبك مع المستندات\nمتجر: {tmp['store_name']}\nقيد المراجعة ⏳", main_kb=True)
+        
         if ADMIN_ID:
-            send(ADMIN_ID, f"🔔 طلب إنشاء متجر جديد + مستند هوية:\n{tmp['store_name']}\n{tmp['phone']}\n{tmp['city']}\nID:{uid}", kb, photo=doc_id)
+            kb = []
+            kb.append([{"text":"✅ قبول","callback_data":f"m_ok:{uid}"}])
+            kb.append([{"text":"⏳ رفض مؤقت","callback_data":f"m_reject_temp:{uid}"},{"text":"🚫 رفض نهائي","callback_data":f"m_reject_perm:{uid}"}])
+            kb.append([{"text":"🔇 كانسل","callback_data":f"m_no:{uid}"}])
+            # إرسال البطاقة للأدمن
+            send(ADMIN_ID, f"🔔 صورة الهوية لطلب المتجر: {tmp['store_name']}", photo=doc_id)
+            # إرسال السيلفي مع الأزرار
+            send(ADMIN_ID, f"🔔 صورة السيلفي وبيانات التاجر:\nالاسم: {tmp['store_name']}\nالهاتف: {tmp['phone']}\nالمدينة: {tmp['city']}\nID:{uid}", kb, photo=selfie_id)
         return
+
     if st=="await_prod_name":
         tmp["name"] = txt
         set_state(uid, "await_prod_price", tmp)
@@ -674,19 +698,30 @@ def handle_cb(c):
         edit(chat, mid, txt, [[{"text":"🔙 رجوع","callback_data":"admin_panel"}]])
         answer(c["id"])
         return
+    
+    # --- التعديل هنا: جلب وإرسال السيلفي في الطلبات المعلقة للإدارة ---
     if data=="admin_pending" and uid==ADMIN_ID:
-        pend = db.execute("SELECT user_id,store_name,phone,city,doc_photo FROM merchants WHERE status='pending' LIMIT 5").fetchall()
+        # جلب الهوية والسيلفي
+        pend = db.execute("SELECT user_id,store_name,phone,city,doc_photo,selfie_photo FROM merchants WHERE status='pending' LIMIT 5").fetchall()
         if not pend:
             edit(chat, mid, "لا يوجد طلبات معلقة", [[{"text":"🔙 رجوع","callback_data":"admin_panel"}]])
         else:
-            edit(chat, mid, f"⏳ {len(pend)} طلبات معلقة + مستندات")
+            edit(chat, mid, f"⏳ {len(pend)} طلبات معلقة بانتظار المراجعة")
             for m in pend:
                 kb = []
                 kb.append([{"text":"✅ قبول","callback_data":f"m_ok:{m[0]}"}])
                 kb.append([{"text":"⏳ رفض مؤقت","callback_data":f"m_reject_temp:{m[0]}"},{"text":"🚫 رفض نهائي","callback_data":f"m_reject_perm:{m[0]}"}])
-                send(chat, f"🔔 تاجر:\n{m[1]}\n{m[2]}\n{m[3]}\nID:{m[0]}", kb, photo=m[4])
+                # إرسال البطاقة
+                if m[4]: send(chat, f"صورة الهوية للتاجر: {m[1]}", photo=m[4])
+                # إرسال السيلفي مع الأزرار
+                if m[5]: 
+                    send(chat, f"🔔 سيلفي التاجر:\n{m[1]}\n{m[2]}\n{m[3]}\nID:{m[0]}", kb, photo=m[5])
+                else:
+                    # في حال كان في طلب قديم ما فيه سيلفي
+                    send(chat, f"🔔 تاجر (بدون سيلفي):\n{m[1]}\n{m[2]}\n{m[3]}\nID:{m[0]}", kb)
         answer(c["id"])
         return
+
     if data=="admin_orders" and uid==ADMIN_ID:
         rows = db.execute("SELECT o.id, o.price, o.status, o.created_at, p.name FROM orders o LEFT JOIN products p ON p.id=o.product_id ORDER BY o.id DESC LIMIT 10").fetchall()
         if not rows:
