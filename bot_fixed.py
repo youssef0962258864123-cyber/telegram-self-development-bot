@@ -709,7 +709,6 @@ def handle_cb(c):
         try:
             send(target_uid, "✅ **تم تأكيد استلام العمولة بنجاح!**\nتم رفع التقييد عن حسابك ويمكنك الآن استخدام كافة خدمات البوت بحرية.", main_kb=True)
             
-            # البحث مباشرة في قاعدة البيانات عن أي طلب قيد الشحن يخص هذا التاجر وإرسال زر الشحن له تلقائياً
             pending_orders = db.execute("SELECT id, price FROM orders WHERE merchant_id=? AND status='pending_shipment' ORDER BY id DESC", (target_uid,)).fetchall()
             for order_check in pending_orders:
                 kb_ship = [[{"text": f"📦 تم الشحن - طلب #{order_check[0]}", "callback_data": f"ship:{order_check[0]}"}]]
@@ -1017,7 +1016,6 @@ def handle_cb(c):
             answer(c["id"], "ليس طلبك")
             return
             
-        # فحص العمولة المستحقة قبل الشحن
         debt = get_user_debt(uid)
         if debt > 0:
             kb = [[{"text": "💳 دفع العمولة الآن", "callback_data": "pay_commission"}]]
@@ -1048,7 +1046,6 @@ def handle_cb(c):
         comm_amount = order[3]
         product_id = order[4]
 
-        # خصم الكمية من المنتج عند تأكيد الاستلام
         prod_data = db.execute("SELECT quantity FROM products WHERE id=?", (product_id,)).fetchone()
         if prod_data and prod_data[0] and prod_data[0] != "غير محدود":
             try:
@@ -1281,7 +1278,7 @@ def handle_cb(c):
         edit(chat, mid, f"🚫 رفض نهائي للمنتج {target}\nأرسل السبب:", [])
         answer(c["id"])
         return
-    if data.startswith("p_no:"))
+    if data.startswith("p_no:"):
         pid = int(data.split(":")[1])
         db.execute("UPDATE products SET status='rejected_temp', reject_reason='كانسل' WHERE id=?", (pid,))
         db.commit()
