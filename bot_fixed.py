@@ -49,7 +49,6 @@ CREATE TABLE IF NOT EXISTS referrals(id INTEGER PRIMARY KEY AUTOINCREMENT, refer
 CREATE TABLE IF NOT EXISTS referral_profits(id INTEGER PRIMARY KEY AUTOINCREMENT, referrer_id INTEGER, buyer_id INTEGER, order_id INTEGER, amount INTEGER, created_at TEXT);
 ''')
 
-# تحديثات الجداول لو الكود شغال من قبل
 try: db.execute("ALTER TABLE users ADD COLUMN profit_active INTEGER DEFAULT 0")
 except: pass
 try: db.execute("ALTER TABLE users ADD COLUMN referral_earnings INTEGER DEFAULT 0")
@@ -1154,7 +1153,7 @@ def handle_cb(c):
         if get_state(uid) != "await_prod_price_confirm":
             answer(c["id"], "انتهت جلسة التسعير أو تم التعامل معها مسبقاً")
             return
-        set_state(uid, "await_prod_price", {})
+        set_state(uid, "await_prod_price", tmp)
         edit(chat, mid, "❌ تم إلغاء السعر. أرسل السعر الأساسي الجديد أرقام فقط من غير عمولة المتجر:")
         answer(c["id"], "أرسل السعر الجديد")
         return
